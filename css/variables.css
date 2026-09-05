@@ -1,0 +1,179 @@
+/* ==========================================================================
+   Finora — Design Tokens
+   Direction: Apple minimalism + Stripe-style financial SaaS clarity.
+   Numbers-first, restrained, no gradients/emoji/excess animation.
+   ========================================================================== */
+
+:root {
+  /* --- Palette (light) --- */
+  --color-bg: #FAFAFB;
+  --color-surface: #FFFFFF;
+  --color-surface-raised: #FFFFFF;
+  --color-border: #E4E6EB;
+  --color-border-strong: #D2D5DC;
+
+  --color-text: #14161B;
+  --color-text-muted: #6B7080;
+  --color-text-faint: #9A9EAC;
+
+  --color-primary: #4A47E0;
+  --color-primary-hover: #3D3ACC;
+  --color-primary-soft: #EEEDFC;
+
+  --color-success: #12805C;
+  --color-success-soft: #E3F5EE;
+  --color-danger: #C4342B;
+  --color-danger-soft: #FBEAE9;
+  --color-warning: #A6650F;
+  --color-warning-soft: #FBF0DF;
+
+  --color-in: var(--color-success);
+  --color-out: var(--color-danger);
+  --color-transfer: #4A5A78;
+
+  /* --- Typography --- */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono-num: 'Inter', -apple-system, sans-serif; /* tabular-nums applied via feature setting */
+
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-base: 0.9375rem;
+  --fs-md: 1.0625rem;
+  --fs-lg: 1.375rem;
+  --fs-xl: 1.75rem;
+  --fs-2xl: 2.25rem;
+
+  /* --- Spacing scale --- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* --- Radii / shadow --- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(20, 22, 27, 0.04);
+  --shadow-md: 0 4px 16px rgba(20, 22, 27, 0.08);
+  --shadow-modal: 0 12px 40px rgba(20, 22, 27, 0.18);
+
+  /* --- Layout --- */
+  --sidebar-w: 240px;
+  --topbar-h: 60px;
+
+  --transition-fast: 120ms ease;
+  --transition-base: 180ms ease;
+}
+
+/* --- Palette (dark) --- */
+[data-theme='dark'] {
+  --color-bg: #0E0F13;
+  --color-surface: #16181D;
+  --color-surface-raised: #1C1F26;
+  --color-border: #262932;
+  --color-border-strong: #343842;
+
+  --color-text: #F2F3F5;
+  --color-text-muted: #9498A6;
+  --color-text-faint: #6B7080;
+
+  --color-primary: #7C79F0;
+  --color-primary-hover: #918EF5;
+  --color-primary-soft: #24234A;
+
+  --color-success: #35C08D;
+  --color-success-soft: #123227;
+  --color-danger: #E8615A;
+  --color-danger-soft: #3A1D1C;
+  --color-warning: #E0A542;
+  --color-warning-soft: #3A2C13;
+
+  --color-in: var(--color-success);
+  --color-out: var(--color-danger);
+  --color-transfer: #9AA8C2;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.36);
+  --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* System theme: mirror dark tokens under prefers-color-scheme when the
+   user has explicitly chosen "System" (handled by data-theme='system' + media query) */
+@media (prefers-color-scheme: dark) {
+  [data-theme='system'] {
+    --color-bg: #0E0F13;
+    --color-surface: #16181D;
+    --color-surface-raised: #1C1F26;
+    --color-border: #262932;
+    --color-border-strong: #343842;
+    --color-text: #F2F3F5;
+    --color-text-muted: #9498A6;
+    --color-text-faint: #6B7080;
+    --color-primary: #7C79F0;
+    --color-primary-hover: #918EF5;
+    --color-primary-soft: #24234A;
+    --color-success: #35C08D;
+    --color-success-soft: #123227;
+    --color-danger: #E8615A;
+    --color-danger-soft: #3A1D1C;
+    --color-warning: #E0A542;
+    --color-warning-soft: #3A2C13;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.36);
+    --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* ==========================================================================
+   Color Themes — an axis independent from light/dark/system.
+   Each palette overrides --color-primary/-hover/-soft; everything else
+   (backgrounds, text, borders) keeps coming from the light/dark tokens
+   above, so any color theme works correctly with any light/dark/system
+   choice.
+   ========================================================================== */
+
+[data-color-theme='indigo'] {
+  --color-primary: #4A47E0; --color-primary-hover: #3D3ACC; --color-primary-soft: #EEEDFC;
+}
+[data-theme='dark'][data-color-theme='indigo'] { --color-primary: #7C79F0; --color-primary-hover: #918EF5; --color-primary-soft: #24234A; }
+
+[data-color-theme='emerald'] {
+  --color-primary: #0F9D6B; --color-primary-hover: #0C8058; --color-primary-soft: #E1F5EC;
+}
+[data-theme='dark'][data-color-theme='emerald'] { --color-primary: #34D399; --color-primary-hover: #5EEAB0; --color-primary-soft: #103829; }
+
+[data-color-theme='rose'] {
+  --color-primary: #D6336C; --color-primary-hover: #B92B5C; --color-primary-soft: #FBE7EE;
+}
+[data-theme='dark'][data-color-theme='rose'] { --color-primary: #F0568A; --color-primary-hover: #F580A8; --color-primary-soft: #3A1B29; }
+
+[data-color-theme='amber'] {
+  --color-primary: #B45309; --color-primary-hover: #92400E; --color-primary-soft: #FCEDD8;
+}
+[data-theme='dark'][data-color-theme='amber'] { --color-primary: #F59E0B; --color-primary-hover: #FBBF45; --color-primary-soft: #3A2A0F; }
+
+[data-color-theme='ocean'] {
+  --color-primary: #0369A1; --color-primary-hover: #075985; --color-primary-soft: #E0F2FE;
+}
+[data-theme='dark'][data-color-theme='ocean'] { --color-primary: #38BDF8; --color-primary-hover: #7DD3FC; --color-primary-soft: #0C2B3D; }
+
+[data-color-theme='graphite'] {
+  --color-primary: #3F3F46; --color-primary-hover: #27272A; --color-primary-soft: #E4E4E7;
+}
+[data-theme='dark'][data-color-theme='graphite'] { --color-primary: #6B7280; --color-primary-hover: #52525B; --color-primary-soft: #2A2A2E; }
+
+/* "System" theme's dark variant only actually applies under this media
+   query (see the [data-theme='system'] block above it) — mirror the same
+   per-color-theme overrides here so System + any color theme works. */
+@media (prefers-color-scheme: dark) {
+  [data-theme='system'][data-color-theme='indigo'] { --color-primary: #7C79F0; --color-primary-hover: #918EF5; --color-primary-soft: #24234A; }
+  [data-theme='system'][data-color-theme='emerald'] { --color-primary: #34D399; --color-primary-hover: #5EEAB0; --color-primary-soft: #103829; }
+  [data-theme='system'][data-color-theme='rose'] { --color-primary: #F0568A; --color-primary-hover: #F580A8; --color-primary-soft: #3A1B29; }
+  [data-theme='system'][data-color-theme='amber'] { --color-primary: #F59E0B; --color-primary-hover: #FBBF45; --color-primary-soft: #3A2A0F; }
+  [data-theme='system'][data-color-theme='ocean'] { --color-primary: #38BDF8; --color-primary-hover: #7DD3FC; --color-primary-soft: #0C2B3D; }
+  [data-theme='system'][data-color-theme='graphite'] { --color-primary: #6B7280; --color-primary-hover: #52525B; --color-primary-soft: #2A2A2E; }
+}

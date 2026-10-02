@@ -4,33 +4,61 @@
 
 .app-shell {
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-columns: 76px 1fr;
   min-height: 100vh;
+  transition: grid-template-columns var(--transition-base);
 }
 
-/* ---------- Sidebar ---------- */
+.app-shell.sidebar-expanded {
+  grid-template-columns: 240px 1fr;
+}
+
+/* ---------- Sidebar — flush, solid, collapsible icon-rail, inverted theme ---------- */
 .sidebar {
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-border);
-  padding: var(--sp-5) var(--sp-3);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  padding: var(--sp-4) var(--sp-2);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-6);
+  gap: var(--sp-5);
+  height: 100vh;
+  width: 60px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: sticky;
+  top: 0;
+  transition: width var(--transition-base);
+  scrollbar-width: none; /* Firefox */
+}
+.sidebar::-webkit-scrollbar { display: none; } /* Chrome, Safari, Edge */
+
+.sidebar.expanded {
+  width: min(224px, 80vw);
+}
+
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--sp-2);
+  min-height: 26px;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 0 var(--sp-2);
   font-size: var(--fs-lg);
   font-weight: 700;
   letter-spacing: -0.02em;
+  color: var(--sidebar-text);
+  overflow: hidden;
 }
 
 .brand-mark {
   width: 26px;
   height: 26px;
+  min-width: 26px;
   border-radius: 8px;
   background: var(--color-primary);
   display: inline-flex;
@@ -40,6 +68,28 @@
   font-size: 13px;
   font-weight: 700;
 }
+
+.brand-text {
+  white-space: nowrap;
+  opacity: 0;
+  width: 0;
+  transition: opacity var(--transition-base);
+}
+.sidebar.expanded .brand-text { opacity: 1; width: auto; }
+
+.sidebar-expand-btn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--sidebar-text-faint);
+  transition: transform var(--transition-base), background var(--transition-fast);
+}
+.sidebar-expand-btn:hover { background: var(--sidebar-surface); color: var(--sidebar-text); }
+.sidebar-expand-btn.is-expanded { transform: rotate(180deg); }
 
 /* Mobile-only overlay — must stay out of grid flow on desktop */
 .sidebar-scrim {
@@ -56,45 +106,65 @@
   font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
-  color: var(--color-text-faint);
+  color: var(--sidebar-text-faint);
   padding: 0 var(--sp-3);
   margin-bottom: var(--sp-1);
   text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  opacity: 0;
+  height: 0;
+  margin-bottom: 0;
+  transition: opacity var(--transition-base);
 }
+.sidebar.expanded .nav-group-label { opacity: 1; height: auto; margin-bottom: var(--sp-1); }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-muted);
+  border-radius: var(--radius-md);
+  color: var(--sidebar-text-muted);
   font-size: var(--fs-sm);
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
 
+.nav-item-label {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  transition: opacity var(--transition-base);
+}
+.sidebar.expanded .nav-item-label { opacity: 1; width: auto; }
+
+.nav-item-badge { margin-left: auto; }
+
 .nav-item:hover {
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: var(--sidebar-surface);
+  color: var(--sidebar-text);
 }
 
 .nav-item.active {
-  background: var(--color-primary-soft);
+  background: var(--color-bg);
   color: var(--color-primary);
+  border-radius: var(--radius-md);
 }
 
 /* ---------- Topbar ---------- */
 .topbar {
   height: var(--topbar-h);
-  border-bottom: 1px solid var(--color-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 var(--sp-6);
-  background: var(--color-surface);
+  background: transparent;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -152,6 +222,41 @@
   margin-bottom: var(--sp-2);
 }
 
+/* ---------- Chart legends (Reports page donut/bar charts) ---------- */
+.chart-legend-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 0;
+  font-size: var(--fs-sm);
+}
+.chart-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.chart-legend-label { flex: 1; color: var(--color-text-muted); }
+.chart-legend-value { font-weight: 600; }
+
+/* ---------- Layout utilities (replace the most-repeated inline styles) ---------- */
+.mb-0 { margin-bottom: 0; }
+.mb-1 { margin-bottom: var(--sp-1); }
+.mb-3 { margin-bottom: var(--sp-3); }
+.mb-4 { margin-bottom: var(--sp-4); }
+.mb-5 { margin-bottom: var(--sp-5); }
+.mb-6 { margin-bottom: var(--sp-6); }
+.mt-2 { margin-top: var(--sp-2); }
+.mt-3 { margin-top: var(--sp-3); }
+.mt-5 { margin-top: var(--sp-5); }
+.hidden { display: none; }
+.flex-row { display: flex; align-items: center; gap: var(--sp-2); }
+.flex-row-wrap { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.flex-col { display: flex; flex-direction: column; gap: var(--sp-2); }
+.align-start { align-self: flex-start; }
+.section-title { font-size: var(--fs-md); font-weight: 650; margin-bottom: var(--sp-3); }
+
 /* ---------- Summary rows — lightweight alternative to nested cards ---------- */
 .summary-list {
   border-top: 1px solid var(--color-border);
@@ -179,16 +284,19 @@
 
 /* ---------- Responsive ---------- */
 @media (max-width: 860px) {
-  .app-shell {
+  .app-shell, .app-shell.sidebar-expanded {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
     position: fixed;
-    inset: 0 14% 0 0;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 60px;
     z-index: 30;
-    transform: translateX(-100%);
-    transition: transform var(--transition-base);
+    transform: translateX(-120%);
+    transition: transform var(--transition-base), width var(--transition-base);
     box-shadow: var(--shadow-modal);
   }
 

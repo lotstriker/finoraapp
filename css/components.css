@@ -196,7 +196,16 @@
   border-top: 1px solid var(--color-border);
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--sp-2);
+}
+
+@media (max-width: 520px) {
+  .modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .modal-footer .btn { width: 100%; }
 }
 
 /* ---------- Toast ---------- */

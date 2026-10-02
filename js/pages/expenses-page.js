@@ -33,7 +33,7 @@ export async function renderExpensesPage(root) {
       <div class="field" style="max-width:320px;">
         <input class="input" id="expense-search" type="text" placeholder="Search description or category" />
       </div>
-      <div class="list" id="expense-list" style="margin-top: var(--sp-3);"></div>
+      <div class="list mt-3" id="expense-list"></div>
       <div id="expense-pagination" style="display:flex; justify-content:center; gap: var(--sp-2); margin-top: var(--sp-4);"></div>
     </div>
   `;
@@ -101,7 +101,7 @@ async function openAddExpenseModal() {
         <div class="field">
           <label for="exp-account">Paid from</label>
           <select class="select" id="exp-account">${accountOptions}</select>
-          <span class="field-hint" id="exp-card-hint" style="display:none;">This will increase this card's used amount.</span>
+          <span class="field-hint hidden" id="exp-card-hint">This will increase this card's used amount.</span>
         </div>
         <div class="field">
           <label for="exp-amount">Amount</label>
@@ -111,7 +111,7 @@ async function openAddExpenseModal() {
           <label for="exp-category">Category *</label>
           <select class="select" id="exp-category" required>${categoryOptions}</select>
         </div>
-        <div class="field" id="exp-new-category-field" style="display:none;">
+        <div class="field hidden" id="exp-new-category-field">
           <label for="exp-new-category">New category name</label>
           <input class="input" id="exp-new-category" type="text" placeholder="e.g. Pet care" />
         </div>
@@ -134,13 +134,13 @@ async function openAddExpenseModal() {
       if (defaultAccountId) accountSelect.value = defaultAccountId;
       const syncCardHint = () => {
         const type = accountSelect.selectedOptions[0]?.dataset.type;
-        qs('#exp-card-hint', root).style.display = type === 'credit_card' ? '' : 'none';
+        qs('#exp-card-hint', root).classList.toggle('hidden', type !== 'credit_card');
       };
       accountSelect.addEventListener('change', syncCardHint);
       syncCardHint();
 
       qs('#exp-category', root).addEventListener('change', (e) => {
-        qs('#exp-new-category-field', root).style.display = e.target.value === '__new__' ? '' : 'none';
+        qs('#exp-new-category-field', root).classList.toggle('hidden', e.target.value !== '__new__');
       });
     },
     actions: [

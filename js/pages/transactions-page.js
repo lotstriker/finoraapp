@@ -14,6 +14,7 @@ import { reverseContribution, getGoalById } from '../modules/savings.js';
 import { reverseCycle, getCommitteeById } from '../modules/committees.js';
 import { reverseRecurringPayment } from '../modules/recurring.js';
 import { recordRefund, getRefundsFor } from '../modules/expenses.js';
+import { getSavedFilters, saveFilter, deleteSavedFilter } from '../modules/preferences.js';
 import { formatCurrency, formatSignedCurrency } from '../utils/currency.js';
 import { formatDate, escapeHtml, qs, bindRowActivation, renderPagination as renderPaginationUI } from '../utils/dom.js';
 import { icons } from '../utils/icons.js';
@@ -49,7 +50,7 @@ export async function renderTransactionsPage(root, params) {
           <p class="page-subtitle">The complete financial ledger — every account, module, and money movement.</p>
         </div>
       </div>
-      <div style="display:flex; gap: var(--sp-3); flex-wrap:wrap; margin-bottom: var(--sp-3);">
+      <div style="display:flex; gap: var(--sp-3); flex-wrap:wrap; margin-bottom: var(--sp-2);">
         <div class="field" style="flex:1; min-width:200px; margin-bottom:0;">
           <input class="input" id="txn-search" type="text" placeholder="Search description, category, account, person, amount, tags…" />
         </div>
@@ -59,6 +60,13 @@ export async function renderTransactionsPage(root, params) {
           </select>
         </div>
       </div>
+      <div class="flex-row-wrap mb-3">
+        <select class="select" id="txn-saved-filters" style="max-width:220px;">
+          <option value="">Saved filters…</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" id="btn-save-filter">Save current filter</button>
+        <button class="btn btn-ghost btn-sm hidden" id="btn-delete-filter">Delete</button>
+      </div>
       <div class="list" id="txn-list"></div>
       <div id="txn-pagination" style="display:flex; justify-content:center; gap: var(--sp-2); margin-top: var(--sp-4);"></div>
     </div>
@@ -67,6 +75,31 @@ export async function renderTransactionsPage(root, params) {
   qs('#txn-search', root).addEventListener('input', (e) => { searchTerm = e.target.value.toLowerCase(); page = 1; refresh(); });
   qs('#txn-type-filter', root).addEventListener('change', (e) => { typeFilter = e.target.value; page = 1; refresh(); });
 
+  qs('#txn-saved-filters', root).addEventListener('change', (e) => {
+    const id = e.target.value;
+    qs('#btn-delete-filter', root).classList.toggle('hidden', !id);
+    if (!id) return;
+    const opt = e.target.selectedOptions[0];
+    searchTerm = opt.dataset.search || '';
+    typeFilter = opt.dataset.type || 'all';
+    qs('#txn-search', root).value = searchTerm;
+    qs('#txn-type-filter', root).value = typeFilter;
+    page = 1;
+    refresh();
+  });
+
+  qs('#btn-delete-filter', root).addEventListener('click', async () => {
+    const id = qs('#txn-saved-filters', root).value;
+    if (!id) return;
+    await deleteSavedFilter(id);
+    toast.success('Filter deleted.');
+    qs('#btn-delete-filter', root).classList.add('hidden');
+    await renderSavedFiltersDropdown(root);
+  });
+
+  qs('#btn-save-filter', root).addEventListener('click', () => openSaveFilterModal(root));
+
+  await renderSavedFiltersDropdown(root);
   await refresh();
 
   const openId = params?.get?.('open');
@@ -77,6 +110,43 @@ export async function renderTransactionsPage(root, params) {
     const reversedIds = new Set(all.filter((t) => t.parentTransactionId).map((t) => t.parentTransactionId));
     openDetail(openId, accountsById, reversedIds);
   }
+}
+
+async function renderSavedFiltersDropdown(root) {
+  const filters = await getSavedFilters();
+  const select = qs('#txn-saved-filters', root);
+  select.innerHTML = `<option value="">Saved filters…</option>` + filters.map((f) =>
+    `<option value="${f.id}" data-search="${escapeHtml(f.searchTerm || '')}" data-type="${f.typeFilter}">${escapeHtml(f.name)}</option>`
+  ).join('');
+}
+
+function openSaveFilterModal(root) {
+  const typeLabel = TYPE_FILTERS.find((t) => t.value === typeFilter)?.label || 'All types';
+  openModal({
+    title: 'Save Current Filter',
+    bodyHtml: `
+      <p class="text-sm text-muted mb-3">Search: "${escapeHtml(searchTerm || '(none)')}" · Type: ${escapeHtml(typeLabel)}</p>
+      <div class="field mb-0">
+        <label for="sf-name">Name this filter</label>
+        <input class="input" id="sf-name" type="text" placeholder="e.g. Credit card expenses" autofocus />
+      </div>
+    `,
+    actions: [
+      { label: 'Cancel', variant: 'btn-secondary', onClick: (close) => close() },
+      {
+        label: 'Save',
+        variant: 'btn-primary',
+        onClick: async (close, modalRoot) => {
+          const name = qs('#sf-name', modalRoot).value.trim();
+          if (!name) { toast.error('Give this filter a name.'); return; }
+          await saveFilter({ name, searchTerm, typeFilter });
+          close();
+          toast.success('Filter saved.');
+          await renderSavedFiltersDropdown(root);
+        },
+      },
+    ],
+  });
 }
 
 async function refresh() {
@@ -223,7 +293,7 @@ async function openDetail(id, accountsById, reversedIds) {
   const moduleDetailHtml = await getModuleDetailHtml(t);
 
   const detailHtml = `
-    <div class="text-sm" style="display:flex; flex-direction:column; gap: var(--sp-2);">
+    <div class="text-sm flex-col">
       <div><span class="text-muted">Amount</span><br/><span class="amount num">${formatCurrency(t.amount)}</span></div>
       <div><span class="text-muted">Account</span><br/>${escapeHtml(acc?.name || '—')}${toAcc ? ` → ${escapeHtml(toAcc.name)}` : ''}</div>
       ${t.category ? `<div><span class="text-muted">Category</span><br/>${escapeHtml(t.category)}</div>` : ''}
@@ -239,9 +309,9 @@ async function openDetail(id, accountsById, reversedIds) {
             ? `<a href="${t.attachment.dataUrl}" target="_blank" rel="noopener"><img src="${t.attachment.dataUrl}" alt="${escapeHtml(t.attachment.name)}" style="max-width:180px; border-radius: var(--radius-sm); margin-top:4px; display:block;" /></a>`
             : `<a href="${t.attachment.dataUrl}" download="${escapeHtml(t.attachment.name)}" class="btn btn-secondary btn-sm" style="margin-top:4px;">${escapeHtml(t.attachment.name)}</a>`}
         </div>` : ''}
-      ${isReversal ? `<div class="badge badge-neutral" style="align-self:flex-start;">Reversal of ${t.parentTransactionId}</div>` : ''}
-      ${alreadyReversed ? `<div class="badge badge-neutral" style="align-self:flex-start;">Already reversed</div>` : ''}
-      ${t.status === 'insufficient_balance' ? `<div class="badge badge-warning" style="align-self:flex-start;">Recorded with insufficient balance</div>` : ''}
+      ${isReversal ? `<div class="badge badge-neutral align-start">Reversal of ${t.parentTransactionId}</div>` : ''}
+      ${alreadyReversed ? `<div class="badge badge-neutral align-start">Already reversed</div>` : ''}
+      ${t.status === 'insufficient_balance' ? `<div class="badge badge-warning align-start">Recorded with insufficient balance</div>` : ''}
     </div>
   `;
 
@@ -269,7 +339,7 @@ function openRefundModal(expense, remaining) {
     openModal({
       title: `Refund · ${expense.description || 'Expense'}`,
       bodyHtml: `
-        <p class="text-sm" style="margin-bottom: var(--sp-3);">Refundable up to ${formatCurrency(remaining)}.</p>
+        <p class="text-sm mb-3">Refundable up to ${formatCurrency(remaining)}.</p>
         <div class="field">
           <label for="rf-account">Refund into</label>
           <select class="select" id="rf-account">${options}</select>
@@ -347,7 +417,7 @@ function openReverseModal(t) {
   openModal({
     title: 'Reverse Transaction',
     bodyHtml: `
-      <p class="text-sm" style="margin-bottom: var(--sp-3);">
+      <p class="text-sm mb-3">
         This posts a new, linked transaction that undoes ${formatCurrency(t.amount)} — the original stays in your history untouched.
         ${['loan_emi', 'savings_contribution', 'savings_withdrawal', 'committee_payment', 'committee_payout'].includes(t.type) || t.module === 'recurring'
           ? '<br/><span class="text-xs text-faint">Linked records (installment, savings goal, committee cycle, or recurring due date) are kept in sync automatically.</span>' : ''}

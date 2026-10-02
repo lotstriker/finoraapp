@@ -168,8 +168,8 @@ async function openPersonDetail(id) {
     title: person.name,
     size: 'md',
     bodyHtml: `
-      <p class="text-sm text-muted" style="margin-bottom: var(--sp-3);">${person.phone || ''}${person.phone && person.email ? ' · ' : ''}${person.email || ''}</p>
-      <div style="margin-bottom: var(--sp-4);">
+      <p class="text-sm text-muted mb-3">${person.phone || ''}${person.phone && person.email ? ' · ' : ''}${person.email || ''}</p>
+      <div class="mb-4">
         <span class="stat-label">${balanceLabel}</span><br/>
         <span class="amount amount--lg num ${balanceClass}">${formatCurrency(Math.abs(person.balance))}</span>
       </div>
@@ -226,7 +226,7 @@ async function openMoneyModal(person, actionKey) {
   openModal({
     title: `${meta.title} · ${person.name}`,
     bodyHtml: `
-      <p class="field-hint" style="margin-bottom: var(--sp-3);">${meta.hint}</p>
+      <p class="field-hint mb-3">${meta.hint}</p>
       <div class="field">
         <label for="mm-account">Account</label>
         <select class="select" id="mm-account">${accountOptions}</select>

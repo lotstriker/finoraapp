@@ -4,7 +4,7 @@
 
 import { withTransaction, reqToPromise } from '../core/db.js';
 
-export const OPTIONAL_MODULES = ['people', 'loans', 'bidsave', 'savings', 'recurring'];
+export const OPTIONAL_MODULES = ['income', 'expenses', 'budgets', 'scheduled', 'people', 'billsplits', 'loans', 'bidsave', 'savings', 'investments', 'recurring'];
 
 export async function getSetting(key, fallback = null) {
   return withTransaction(['settings'], 'readonly', async (tx) => {
@@ -19,10 +19,10 @@ export async function setSetting(key, value) {
   });
 }
 
-/** All optional modules default to enabled until the user turns one off. */
+/** All optional modules default to OFF until the user turns one on from Settings. */
 export async function getEnabledModules() {
   const stored = await getSetting('enabledModules', null);
-  const defaults = Object.fromEntries(OPTIONAL_MODULES.map((m) => [m, true]));
+  const defaults = Object.fromEntries(OPTIONAL_MODULES.map((m) => [m, false]));
   return { ...defaults, ...(stored || {}) };
 }
 
@@ -39,4 +39,22 @@ export async function isOnboardingComplete() {
 
 export async function markOnboardingComplete() {
   return setSetting('onboardingComplete', true);
+}
+
+/** Named search+type filter combinations saved from the Transactions page. */
+export async function getSavedFilters() {
+  return getSetting('savedTxnFilters', []);
+}
+
+export async function saveFilter({ name, searchTerm, typeFilter }) {
+  const filters = await getSavedFilters();
+  const entry = { id: `flt_${Date.now().toString(36)}`, name, searchTerm, typeFilter };
+  filters.push(entry);
+  await setSetting('savedTxnFilters', filters);
+  return entry;
+}
+
+export async function deleteSavedFilter(id) {
+  const filters = await getSavedFilters();
+  await setSetting('savedTxnFilters', filters.filter((f) => f.id !== id));
 }

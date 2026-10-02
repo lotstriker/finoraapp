@@ -11,6 +11,7 @@ import { getLedgerForAccount } from '../core/ledger.js';
 import { ValidationError, CreditLimitExceededError } from '../core/ledger.js';
 import { getSetting } from '../modules/preferences.js';
 import { getPeople } from '../modules/people.js';
+import { openAddTransferModal } from './transfers-page.js';
 import { createTransfer } from '../modules/transfers.js';
 import { recordRepaymentReceived } from '../modules/people.js';
 import { formatCurrency, formatSignedCurrency } from '../utils/currency.js';
@@ -31,7 +32,7 @@ export async function renderAccountsPage(container, params) {
         <h1>Accounts</h1>
         <button class="btn btn-primary" id="btn-add-account">${icons.plus} Add Account</button>
       </div>
-      <div class="grid grid-cards" id="accounts-summary" style="margin-bottom: var(--sp-5);"></div>
+      <div class="grid grid-cards mb-5" id="accounts-summary"></div>
       <div class="list" id="accounts-list"></div>
     </div>
   `;
@@ -132,7 +133,7 @@ function openCreateAccountModal() {
           <input class="input" id="acc-initial" type="number" min="0" step="0.01" placeholder="0" />
           <span class="field-hint">This posts a real ledger entry — it's not a silent starting number.</span>
         </div>
-        <div class="field" id="field-limit" style="display:none;">
+        <div class="field hidden" id="field-limit">
           <label for="acc-limit">Credit limit</label>
           <input class="input" id="acc-limit" type="number" min="1" step="0.01" placeholder="50000" />
         </div>
@@ -184,8 +185,8 @@ function openCreateAccountModal() {
       const typeSelect = qs('#acc-type', root);
       const toggleFields = () => {
         const isCard = typeSelect.value === 'credit_card';
-        qs('#field-initial', root).style.display = isCard ? 'none' : '';
-        qs('#field-limit', root).style.display = isCard ? '' : 'none';
+        qs('#field-initial', root).classList.toggle('hidden', isCard);
+        qs('#field-limit', root).classList.toggle('hidden', !isCard);
       };
       typeSelect.addEventListener('change', toggleFields);
       toggleFields();
@@ -209,21 +210,22 @@ async function openAccountDetail(id) {
     title: account.name,
     size: 'lg',
     bodyHtml: `
-      <p class="text-sm text-muted" style="margin-bottom: var(--sp-3);">${accountTypeLabel(account.type)}${account.archived ? ' · Archived' : ''}</p>
+      <p class="text-sm text-muted mb-3">${accountTypeLabel(account.type)}${account.archived ? ' · Archived' : ''}</p>
       <div style="display:flex; gap: var(--sp-2); margin-bottom: var(--sp-4); border-bottom: 1px solid var(--color-border);">
         <button class="btn btn-ghost btn-sm tab-btn active" data-tab="overview" style="border-radius:0; border-bottom:2px solid var(--color-primary);">Overview</button>
         <button class="btn btn-ghost btn-sm tab-btn" data-tab="transactions" style="border-radius:0;">Transactions</button>
         <button class="btn btn-ghost btn-sm tab-btn" data-tab="reports" style="border-radius:0;">Reports</button>
       </div>
       <div id="tab-overview" class="tab-panel"></div>
-      <div id="tab-transactions" class="tab-panel" style="display:none;"></div>
-      <div id="tab-reports" class="tab-panel" style="display:none;"></div>
+      <div id="tab-transactions" class="tab-panel hidden"></div>
+      <div id="tab-reports" class="tab-panel hidden"></div>
     `,
     actions: [
       ...(account.archived
         ? [{ label: 'Unarchive', variant: 'btn-secondary', onClick: async (close) => { await unarchiveAccount(id); close(); toast.success('Account restored.'); refresh(); } }]
         : [
             { label: 'Adjust Balance', variant: 'btn-secondary', onClick: (close) => { close(); openAdjustBalanceModal(account); } },
+            { label: 'Transfer', variant: 'btn-secondary', onClick: (close) => { close(); openAddTransferModal(id, refresh); } },
             { label: 'Archive', variant: 'btn-secondary', onClick: async (close) => {
                 const ok = await confirmDialog({ title: 'Archive account', message: `Hide "${account.name}" from your active accounts? Its history is kept.` });
                 if (ok) { await archiveAccount(id); close(); toast.success('Account archived.'); refresh(); }
@@ -238,8 +240,8 @@ async function openAccountDetail(id) {
           root.querySelectorAll('.tab-btn').forEach((b) => { b.classList.remove('active'); b.style.borderBottom = 'none'; });
           btn.classList.add('active');
           btn.style.borderBottom = '2px solid var(--color-primary)';
-          root.querySelectorAll('.tab-panel').forEach((p) => { p.style.display = 'none'; });
-          qs(`#tab-${btn.dataset.tab}`, root).style.display = '';
+          root.querySelectorAll('.tab-panel').forEach((p) => { p.classList.add('hidden'); });
+          qs(`#tab-${btn.dataset.tab}`, root).classList.remove('hidden');
         });
       });
 
@@ -253,7 +255,7 @@ async function openAccountDetail(id) {
 async function renderOverviewTab(root, account, id) {
   const history = await getLedgerForAccount(id);
   qs('#tab-overview', root).innerHTML = `
-    <div class="grid grid-cards" style="margin-bottom: var(--sp-4);">
+    <div class="grid grid-cards mb-4">
       <div class="card stat-card">
         <span class="stat-label">Balance</span>
         <span class="amount amount--lg num ${account.balance < 0 ? 'amount--out' : ''}">${formatCurrency(account.balance)}</span>
@@ -293,7 +295,7 @@ async function renderTransactionsTab(root, id) {
       <div class="list">
         ${pageItems.length ? pageItems.map((t) => historyRow(t, id)).join('') : `<div class="empty-state"><h3>No transactions yet</h3></div>`}
       </div>
-      <div id="detail-pagination" style="margin-top: var(--sp-3);"></div>
+      <div id="detail-pagination" class="mt-3"></div>
     `;
     renderPagination(qs('#detail-pagination', root), detailPage, totalPages, (newPage) => { detailPage = newPage; renderPage(); });
   };
@@ -312,7 +314,7 @@ async function renderReportsTab(root, id) {
   const catRows = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
 
   qs('#tab-reports', root).innerHTML = `
-    <p class="text-sm text-muted" style="margin-bottom: var(--sp-3);">This month, this account only</p>
+    <p class="text-sm text-muted mb-3">This month, this account only</p>
     <div class="list">
       ${catRows.length ? catRows.map(([cat, amt]) => `
         <div class="list-row">
@@ -350,7 +352,7 @@ function openAdjustBalanceModal(account) {
   openModal({
     title: `Adjust Balance · ${account.name}`,
     bodyHtml: `
-      <p class="text-sm" style="margin-bottom: var(--sp-3);">Current balance: <strong>${formatCurrency(account.balance)}</strong>. Enter the actual balance (e.g. from your bank statement) — Finora will record the exact difference, not silently overwrite it.</p>
+      <p class="text-sm mb-3">Current balance: <strong>${formatCurrency(account.balance)}</strong>. Enter the actual balance (e.g. from your bank statement) — Finora will record the exact difference, not silently overwrite it.</p>
       <div class="field">
         <label for="adj-actual">Actual balance</label>
         <input class="input" id="adj-actual" type="number" step="0.01" value="${account.balance}" required />
@@ -402,16 +404,16 @@ async function openAddMoneyModal(account) {
     title: `Add Money · ${account.name}`,
     bodyHtml: `
       <form id="form-add-money">
-        ${isCreditCard ? `<p class="field-hint" style="margin-bottom: var(--sp-3);">Credit cards are paid down by transfer, not recorded as income.</p>` : ''}
+        ${isCreditCard ? `<p class="field-hint mb-3">Credit cards are paid down by transfer, not recorded as income.</p>` : ''}
         <div class="field">
           <label for="am-source">Source</label>
           <select class="select" id="am-source">${sourceOptions}</select>
         </div>
-        <div class="field" id="am-transfer-field" style="display:none;">
+        <div class="field hidden" id="am-transfer-field">
           <label for="am-from-account">From account</label>
           <select class="select" id="am-from-account">${otherAccounts.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}</select>
         </div>
-        <div class="field" id="am-person-field" style="display:none;">
+        <div class="field hidden" id="am-person-field">
           <label for="am-person">Person</label>
           <select class="select" id="am-person">${people.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select>
         </div>
@@ -429,8 +431,8 @@ async function openAddMoneyModal(account) {
       const sourceSelect = qs('#am-source', root);
       const sync = () => {
         const val = sourceSelect.value;
-        qs('#am-transfer-field', root).style.display = val === 'transfer' ? '' : 'none';
-        qs('#am-person-field', root).style.display = val === 'person_repayment' ? '' : 'none';
+        qs('#am-transfer-field', root).classList.toggle('hidden', val !== 'transfer');
+        qs('#am-person-field', root).classList.toggle('hidden', val !== 'person_repayment');
       };
       sourceSelect.addEventListener('change', sync);
       sync();

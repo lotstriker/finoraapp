@@ -141,10 +141,10 @@ async function openGoalDetail(id) {
   openModal({
     title: goal.name,
     bodyHtml: `
-      <div class="card stat-card" style="margin-bottom: var(--sp-4);">
+      <div class="card stat-card mb-4">
         <span class="stat-label">Progress</span>
         <span class="amount amount--lg num">${formatCurrency(goal.currentAmount)} <span class="text-sm text-muted">/ ${formatCurrency(goal.targetAmount)}</span></span>
-        <div class="progress-track" style="margin-top: var(--sp-2);"><div class="progress-fill ${percent >= 100 ? 'is-complete' : ''}" style="width:${percent}%;"></div></div>
+        <div class="progress-track mt-2"><div class="progress-fill ${percent >= 100 ? 'is-complete' : ''}" style="width:${percent}%;"></div></div>
         <span class="text-xs text-faint">${remaining > 0 ? `${formatCurrency(remaining)} to go` : 'Target reached'}${goal.targetDate ? ` · Target date ${formatDate(goal.targetDate)}` : ''}</span>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap: var(--sp-2); margin-bottom: var(--sp-4);">

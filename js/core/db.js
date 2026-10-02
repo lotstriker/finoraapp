@@ -18,19 +18,21 @@
 // upgrade transaction, not a fresh `createObjectStore` call).
 // ==========================================================================
 
-const DB_NAME = 'finora';
-const DB_VERSION = 1;
+import { getActiveDbName } from '../modules/profiles.js';
+
+export const DB_VERSION = 5;
 
 let dbPromise = null;
 
 /**
- * Opens (and lazily creates) the Finora IndexedDB database.
- * Safe to call many times — the connection is cached.
+ * Opens (and lazily creates) the active profile's Finora IndexedDB
+ * database. Safe to call many times — the connection is cached.
  * @returns {Promise<IDBDatabase>}
  */
 export function openDB() {
   if (dbPromise) return dbPromise;
 
+  const DB_NAME = getActiveDbName();
   dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
@@ -110,6 +112,36 @@ export function openDB() {
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
       }
+
+      // v2: budgets — per-category monthly spending limits (Monthly Budgets)
+      if (event.oldVersion < 2 && !db.objectStoreNames.contains('budgets')) {
+        const store = db.createObjectStore('budgets', { keyPath: 'id' });
+        store.createIndex('category', 'category');
+      }
+
+      // v3: scheduled_transactions — one-time future transactions the user
+      // plans ahead (e.g. "salary on the 15th"), distinct from Recurring
+      // rules which repeat. Never touches the ledger until recorded.
+      if (event.oldVersion < 3 && !db.objectStoreNames.contains('scheduled_transactions')) {
+        const store = db.createObjectStore('scheduled_transactions', { keyPath: 'id' });
+        store.createIndex('scheduledDate', 'scheduledDate');
+        store.createIndex('status', 'status');
+      }
+
+      // v4: bill_splits — groups a real expense transaction with the
+      // per-person "lend" entries created for each participant's share,
+      // purely for display; the actual debt tracking reuses People.
+      if (event.oldVersion < 4 && !db.objectStoreNames.contains('bill_splits')) {
+        db.createObjectStore('bill_splits', { keyPath: 'id' });
+      }
+
+      // v5: investments — FD/Mutual Fund/Stocks/Gold/etc. tracking.
+      // investedAmount leaves an account as a real ledger transaction;
+      // currentValue is a manually-updated estimate with no ledger effect.
+      if (event.oldVersion < 5 && !db.objectStoreNames.contains('investments')) {
+        const store = db.createObjectStore('investments', { keyPath: 'id' });
+        store.createIndex('status', 'status');
+      }
     };
 
     request.onsuccess = (event) => resolve(event.target.result);
@@ -159,7 +191,8 @@ export function reqToPromise(request) {
 export const ALL_STORES = [
   'accounts', 'ledger', 'people', 'categories', 'loans', 'loan_installments',
   'committees', 'committee_memberships', 'committee_cycles',
-  'savings_goals', 'savings_contributions', 'recurring_rules', 'settings',
+  'savings_goals', 'savings_contributions', 'recurring_rules', 'settings', 'budgets',
+  'scheduled_transactions', 'bill_splits', 'investments',
 ];
 
 /** Convenience: get a single record by id from a store (own short transaction). */

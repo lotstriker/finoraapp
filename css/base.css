@@ -13,7 +13,9 @@ body {
   font-family: var(--font-ui);
   font-size: var(--fs-base);
   color: var(--color-text);
-  background: var(--color-bg);
+  background-color: var(--color-bg);
+  background-image: var(--page-bg-image);
+  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   transition: background var(--transition-base), color var(--transition-base);
 }
@@ -74,3 +76,22 @@ ul { list-style: none; margin: 0; padding: 0; }
 .text-faint { color: var(--color-text-faint); }
 .text-sm { font-size: var(--fs-sm); }
 .text-xs { font-size: var(--fs-xs); }
+
+/* ---------- Print (used for "Export PDF" via the browser's Print dialog) ---------- */
+.print-only { display: none; }
+
+@media print {
+  .print-only { display: block !important; margin-bottom: var(--sp-4); }
+  .sidebar, .sidebar-scrim, .topbar, .hamburger, .theme-toggle,
+  .btn, .modal-scrim, .toast-container, .pagination, #btn-export-pdf,
+  .rpt-tab-bar, .rpt-period-controls {
+    display: none !important;
+  }
+  .main { margin: 0 !important; }
+  .page-mount, .page { padding: 0 !important; max-width: none !important; }
+  body { background: #fff !important; color: #000 !important; }
+  .card, .list-row, .list { background: #fff !important; border-color: #ccc !important; }
+  .amount--in { color: #0a6b3f !important; }
+  .amount--out { color: #a3221a !important; }
+  a[href]::after { content: none !important; }
+}

@@ -51,14 +51,14 @@ async function refresh() {
   `).join('');
 }
 
-async function openAddTransferModal() {
+export async function openAddTransferModal(preselectFromId, onSuccess) {
   const accounts = await getAccounts();
   if (accounts.length < 2) {
     toast.warning('You need at least two accounts to make a transfer.');
     return;
   }
   const options = accounts.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
-  const defaultAccountId = await getSetting('defaultAccountId');
+  const defaultAccountId = preselectFromId || await getSetting('defaultAccountId');
 
   openModal({
     title: 'Add Transfer',
@@ -112,7 +112,8 @@ async function openAddTransferModal() {
             await createTransfer({ fromAccountId, toAccountId, amount, description, date });
             close();
             toast.success('Transfer completed.');
-            refresh();
+            if (container) refresh();
+            if (onSuccess) onSuccess();
           } catch (err) {
             toast.error(err instanceof ValidationError ? err.message : 'Something went wrong with the transfer.');
           }

@@ -176,6 +176,19 @@ export async function recordCycle(committeeId, cycleId, input) {
   const isSkip = winningBid === 0;
   const userWon = isSkip ? false : !!input.userWon;
 
+  if (userWon) {
+    const allCycles = await getCycles(committeeId);
+    const priorWins = allCycles.filter((c) => c.id !== cycleId && c.status === 'recorded' && c.userWon);
+    if (priorWins.length >= committee.userMemberships) {
+      throw new ValidationError(
+        `You only have ${committee.userMemberships} membership${committee.userMemberships > 1 ? 's' : ''} in this committee, and ${priorWins.length > 1 ? 'they have' : 'it has'} already won ${priorWins.length} time${priorWins.length > 1 ? 's' : ''}. Each membership can only win once.`
+      );
+    }
+    if (input.winnerMembershipId && priorWins.some((c) => c.winnerMembershipId === input.winnerMembershipId)) {
+      throw new ValidationError('This membership has already won a cycle — pick the other one.');
+    }
+  }
+
   const discountPerMembership = roundMoney(winningBid / committee.numberOfMembers);
   const payablePerMembership = roundMoney(committee.baseContribution - discountPerMembership);
   const totalPayable = roundMoney(payablePerMembership * committee.userMemberships);

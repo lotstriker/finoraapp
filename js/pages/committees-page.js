@@ -27,7 +27,7 @@ export async function renderCommitteesPage(root, params) {
         <h1>Bid &amp; Save</h1>
         <button class="btn btn-primary" id="btn-add-committee">${icons.plus} Add Committee</button>
       </div>
-      <div class="grid grid-cards" id="committees-summary" style="margin-bottom: var(--sp-5);"></div>
+      <div class="grid grid-cards mb-5" id="committees-summary"></div>
       <div class="list" id="committees-list"></div>
     </div>
   `;
@@ -237,18 +237,28 @@ async function openDetail(id) {
     title: committee.name,
     size: 'lg',
     bodyHtml: `
-      <p class="text-sm text-muted" style="margin-bottom: var(--sp-4);">
+      <p class="text-sm text-muted mb-4">
         ${committee.userMemberships} membership${committee.userMemberships > 1 ? 's' : ''} of ${committee.numberOfMembers} · Base ${formatCurrency(committee.baseContribution * committee.userMemberships)}/cycle
         ${committee.endDate ? ` · ${formatDate(committee.startDate)} → ${formatDate(committee.endDate)}` : ''}
       </p>
-      <div style="margin-bottom: var(--sp-4);">
-        <span class="stat-label">Net Profit</span><br/>
-        <span class="amount amount--lg num amount--in">${formatCurrency(progress.totalSaving)}</span>
-      </div>
-      <div class="summary-list">
-        <div class="summary-row"><span class="summary-label">Total Paid</span><span class="summary-value num">${formatCurrency(progress.totalPaid)}</span></div>
-        ${progress.totalReceived > 0 ? `<div class="summary-row"><span class="summary-label">Total Received</span><span class="summary-value num amount--in">${formatCurrency(progress.totalReceived)}</span></div>` : ''}
-        <div class="summary-row"><span class="summary-label">Progress</span><span class="summary-value num">${progress.recordedCount}/${progress.totalCycles}</span></div>
+      <div class="grid grid-cards mb-4">
+        <div class="card stat-card">
+          <span class="stat-label">Net Profit</span>
+          <span class="amount amount--lg num amount--in">${formatCurrency(progress.totalSaving)}</span>
+        </div>
+        <div class="card stat-card">
+          <span class="stat-label">Total Paid</span>
+          <span class="amount amount--lg num">${formatCurrency(progress.totalPaid)}</span>
+        </div>
+        ${progress.totalReceived > 0 ? `
+        <div class="card stat-card">
+          <span class="stat-label">Total Received</span>
+          <span class="amount amount--lg num amount--in">${formatCurrency(progress.totalReceived)}</span>
+        </div>` : ''}
+        <div class="card stat-card">
+          <span class="stat-label">Progress</span>
+          <span class="amount amount--lg num">${progress.recordedCount}/${progress.totalCycles}</span>
+        </div>
       </div>
       <h3 style="font-size: var(--fs-sm); font-weight: 650; margin-bottom: var(--sp-2);">Cycle History</h3>
       <div class="list" id="cmt-history-list"></div>
@@ -325,11 +335,11 @@ async function openRecordCycleModal(committee, cycle) {
         </div>
       </div>
       <span class="field-hint" id="rc-calc-hint"></span>
-      <div class="field" style="margin-top: var(--sp-3);">
+      <div class="field mt-3">
         <label for="rc-pay-account">Pay contribution from</label>
         <select class="select" id="rc-pay-account">${accountOptions}</select>
       </div>
-      <div class="field" id="rc-payout-field" style="display:none;">
+      <div class="field hidden" id="rc-payout-field">
         <label for="rc-payout-account">Add payout to account?</label>
         <select class="select" id="rc-payout-account">
           <option value="">Don't add to any account</option>
@@ -337,7 +347,7 @@ async function openRecordCycleModal(committee, cycle) {
         </select>
         <span class="field-hint">If you don't add it, the payout is still recorded in this cycle's history — it just won't change any account balance.</span>
       </div>
-      <div class="field" id="rc-membership-field" style="display:none;">
+      <div class="field hidden" id="rc-membership-field">
         <label for="rc-membership">Which of your memberships won?</label>
         <select class="select" id="rc-membership"></select>
       </div>
@@ -348,7 +358,7 @@ async function openRecordCycleModal(committee, cycle) {
       }
       const recalc = () => {
         const skip = qs('#rc-skip', root).checked;
-        qs('#rc-bid-fields', root).style.display = skip ? 'none' : '';
+        qs('#rc-bid-fields', root).classList.toggle('hidden', skip);
         const bid = skip ? 0 : Number(qs('#rc-bid', root).value) || 0;
         const won = !skip && qs('#rc-won', root).checked;
 
@@ -362,8 +372,8 @@ async function openRecordCycleModal(committee, cycle) {
           `Payable: ${formatCurrency(totalPayable)} · Your profit: ${formatCurrency(saving)}` +
           (won ? ` · Payout: ${formatCurrency(payout)}` : '');
 
-        qs('#rc-payout-field', root).style.display = won && payout > 0 ? '' : 'none';
-        qs('#rc-membership-field', root).style.display = won && memberships.length > 0 ? '' : 'none';
+        qs('#rc-payout-field', root).classList.toggle('hidden', !(won && payout > 0));
+        qs('#rc-membership-field', root).classList.toggle('hidden', !(won && memberships.length > 0));
       };
       qs('#rc-skip', root).addEventListener('change', recalc);
       qs('#rc-bid', root).addEventListener('input', recalc);

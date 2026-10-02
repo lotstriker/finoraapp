@@ -7,25 +7,29 @@
 
 import { getAll, ALL_STORES, withTransaction, reqToPromise } from '../core/db.js';
 import { ValidationError } from '../core/ledger.js';
+import { getSetting, setSetting } from './preferences.js';
 
-const PBKDF2_ITERATIONS = 250000;
-const BACKUP_VERSION = 2;
+const LAST_BACKUP_KEY = 'lastBackupAt';
+const BACKUP_REMINDER_DAYS = 14;
 
-function bufToBase64(buf) {
+export const PBKDF2_ITERATIONS = 250000;
+export const BACKUP_VERSION = 2;
+
+export function bufToBase64(buf) {
   const bytes = new Uint8Array(buf);
   let binary = '';
   bytes.forEach((b) => { binary += String.fromCharCode(b); });
   return btoa(binary);
 }
 
-function base64ToBuf(b64) {
+export function base64ToBuf(b64) {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes.buffer;
 }
 
-async function deriveKey(password, saltBuf, usage) {
+export async function deriveKey(password, saltBuf, usage) {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
@@ -38,7 +42,7 @@ async function deriveKey(password, saltBuf, usage) {
 }
 
 /** Gathers every store into one plain object, keyed by store name. */
-async function exportAllStores() {
+export async function exportAllStores() {
   const data = {};
   for (const name of ALL_STORES) {
     data[name] = await getAll(name);
@@ -75,6 +79,29 @@ export async function createEncryptedBackup(password) {
   };
 
   return JSON.stringify(container);
+}
+
+/** Marks "now" as the last successful backup — called by the UI once the file has actually downloaded. */
+export async function recordBackupCompleted() {
+  await setSetting(LAST_BACKUP_KEY, new Date().toISOString());
+}
+
+/**
+ * Tells the UI whether a backup reminder should show, and how long it's
+ * been. Returns null if a backup was made recently (or restore/first-run
+ * data exists but no backup yet and there's nothing worth backing up).
+ */
+export async function getBackupReminderStatus() {
+  const lastBackupAt = await getSetting(LAST_BACKUP_KEY, null);
+  const accounts = await getAll('accounts');
+  if (accounts.length === 0) return null; // nothing to back up yet
+
+  if (!lastBackupAt) {
+    return { daysSince: null, overdue: true, message: "You haven't backed up Finora yet." };
+  }
+  const daysSince = Math.floor((Date.now() - new Date(lastBackupAt).getTime()) / 86400000);
+  if (daysSince < BACKUP_REMINDER_DAYS) return null;
+  return { daysSince, overdue: true, message: `It's been ${daysSince} days since your last backup.` };
 }
 
 /**

@@ -33,7 +33,7 @@ export async function renderIncomePage(root) {
       <div class="field" style="max-width:320px;">
         <input class="input" id="income-search" type="text" placeholder="Search description or category" />
       </div>
-      <div class="list" id="income-list" style="margin-top: var(--sp-3);"></div>
+      <div class="list mt-3" id="income-list"></div>
       <div id="income-pagination" style="display:flex; justify-content:center; gap: var(--sp-2); margin-top: var(--sp-4);"></div>
     </div>
   `;
@@ -110,7 +110,7 @@ async function openAddIncomeModal() {
           <label for="inc-category">Category *</label>
           <select class="select" id="inc-category" required>${categoryOptions}</select>
         </div>
-        <div class="field" id="inc-new-category-field" style="display:none;">
+        <div class="field hidden" id="inc-new-category-field">
           <label for="inc-new-category">New category name</label>
           <input class="input" id="inc-new-category" type="text" placeholder="e.g. Consulting" />
         </div>
@@ -135,7 +135,7 @@ async function openAddIncomeModal() {
     onMount: (root) => {
       if (defaultAccountId) qs('#inc-account', root).value = defaultAccountId;
       qs('#inc-category', root).addEventListener('change', (e) => {
-        qs('#inc-new-category-field', root).style.display = e.target.value === '__new__' ? '' : 'none';
+        qs('#inc-new-category-field', root).classList.toggle('hidden', e.target.value !== '__new__');
       });
     },
     actions: [

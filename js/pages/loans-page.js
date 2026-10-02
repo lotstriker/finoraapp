@@ -9,12 +9,15 @@ import {
 import { getAccounts } from '../modules/accounts.js';
 import { ValidationError } from '../core/ledger.js';
 import { formatCurrency } from '../utils/currency.js';
-import { formatDate, escapeHtml, qs, bindRowActivation } from '../utils/dom.js';
+import { formatDate, escapeHtml, qs, bindRowActivation, renderPagination } from '../utils/dom.js';
 import { icons } from '../utils/icons.js';
+import { getDebtPayoffPlan } from '../modules/debt-planner.js';
 import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 
 let container = null;
+let installmentPage = 1;
+const INSTALLMENT_PAGE_SIZE = 12;
 
 export async function renderLoansPage(root, params) {
   container = root;
@@ -22,12 +25,16 @@ export async function renderLoansPage(root, params) {
     <div class="page">
       <div class="page-header">
         <h1>Loans &amp; EMI</h1>
-        <button class="btn btn-primary" id="btn-add-loan">${icons.plus} Add Loan</button>
+        <div class="flex-row-wrap">
+          <button class="btn btn-secondary" id="btn-payoff-planner">${icons.reports || ''} Payoff Planner</button>
+          <button class="btn btn-primary" id="btn-add-loan">${icons.plus} Add Loan</button>
+        </div>
       </div>
       <div class="list" id="loans-list"></div>
     </div>
   `;
   qs('#btn-add-loan', root).addEventListener('click', openCreateLoanModal);
+  qs('#btn-payoff-planner', root).addEventListener('click', openPayoffPlannerModal);
   await refresh();
 
   const openId = params?.get?.('open');
@@ -70,6 +77,74 @@ async function refresh() {
   });
 }
 
+async function openPayoffPlannerModal() {
+  await renderPlan('avalanche', 0);
+}
+
+async function renderPlan(strategy, extraMonthly) {
+  const plan = await getDebtPayoffPlan(strategy, extraMonthly);
+
+  if (!plan) {
+    openModal({ title: 'Payoff Planner', bodyHtml: `<div class="empty-state"><h3>No active loans</h3><p>Add a loan to plan its payoff.</p></div>`, actions: [{ label: 'Close', variant: 'btn-ghost', onClick: (close) => close() }] });
+    return;
+  }
+
+  openModal({
+    title: 'Debt Payoff Planner',
+    size: 'lg',
+    bodyHtml: `
+      <div class="field">
+        <label for="dp-strategy">Strategy</label>
+        <select class="select" id="dp-strategy">
+          <option value="avalanche" ${strategy === 'avalanche' ? 'selected' : ''}>Avalanche — highest interest rate first (saves the most money)</option>
+          <option value="snowball" ${strategy === 'snowball' ? 'selected' : ''}>Snowball — smallest balance first (quick wins for motivation)</option>
+        </select>
+      </div>
+      <div class="field mb-4">
+        <label for="dp-extra">Extra monthly payment (beyond minimums)</label>
+        <input class="input" id="dp-extra" type="number" min="0" step="0.01" value="${extraMonthly || ''}" placeholder="0" />
+      </div>
+
+      <div class="grid grid-cards mb-4">
+        <div class="card stat-card">
+          <span class="stat-label">Payoff Time</span>
+          <span class="amount amount--lg num">${plan.planMonths} mo</span>
+          ${plan.monthsSaved > 0 ? `<span class="text-xs" style="color:var(--color-success);">${plan.monthsSaved} months sooner</span>` : ''}
+        </div>
+        <div class="card stat-card">
+          <span class="stat-label">Total Interest</span>
+          <span class="amount amount--lg num amount--out">${formatCurrency(plan.planInterest)}</span>
+          ${plan.interestSaved > 0 ? `<span class="text-xs" style="color:var(--color-success);">${formatCurrency(plan.interestSaved)} saved</span>` : ''}
+        </div>
+      </div>
+
+      <p class="section-title">Pay off in this order</p>
+      <div class="list">
+        ${plan.order.map((l, i) => `
+          <div class="list-row">
+            <div class="row-main">
+              <div class="row-title">${i + 1}. ${escapeHtml(l.name)}</div>
+              <div class="row-sub">${l.interestRate}% p.a. · ${formatCurrency(l.remainingPrincipal)} remaining</div>
+            </div>
+            <span class="text-sm text-muted">${l.payoffMonth ? `Paid off in month ${l.payoffMonth}` : ''}</span>
+          </div>
+        `).join('')}
+      </div>
+      <p class="text-xs text-faint mt-2">Estimate only — assumes rates and minimum payments stay constant. Not financial advice.</p>
+    `,
+    actions: [{ label: 'Close', variant: 'btn-ghost', onClick: (close) => close() }],
+    onMount: (root) => {
+      const recompute = () => {
+        const newStrategy = qs('#dp-strategy', root).value;
+        const newExtra = Number(qs('#dp-extra', root).value) || 0;
+        renderPlan(newStrategy, newExtra);
+      };
+      qs('#dp-strategy', root).addEventListener('change', recompute);
+      qs('#dp-extra', root).addEventListener('change', recompute);
+    },
+  });
+}
+
 function openCreateLoanModal() {
   openModal({
     title: 'Add Loan',
@@ -104,7 +179,7 @@ function openCreateLoanModal() {
           </div>
         </div>
         <span class="field-hint" id="ln-emi-hint"></span>
-        <div class="field" style="margin-top: var(--sp-3);">
+        <div class="field mt-3">
           <label for="ln-start">Start date</label>
           <input class="input" id="ln-start" type="date" value="${new Date().toISOString().slice(0, 10)}" />
         </div>
@@ -175,8 +250,9 @@ async function openLoanDetail(id) {
   const installments = await getInstallments(id);
   const progress = loanProgress(installments);
   const nextPending = installments.find((i) => i.status !== 'paid');
+  installmentPage = 1;
 
-  const scheduleHtml = installments.slice(0, 12).map((i) => `
+  const scheduleRow = (i) => `
     <div class="list-row ${i.status === 'paid' ? 'is-clickable' : ''}" ${i.status === 'paid' ? `data-inst="${i.id}"` : ''}>
       <div class="row-main">
         <div class="row-title">EMI #${i.installmentNumber}${i.installmentNumber === installments.length ? ' <span class="badge badge-neutral">Final</span>' : ''}</div>
@@ -187,22 +263,22 @@ async function openLoanDetail(id) {
         <span class="amount num">${formatCurrency(i.amount)}</span>
       </div>
     </div>
-  `).join('');
+  `;
 
   openModal({
     title: loan.name,
     size: 'lg',
     bodyHtml: `
-      <p class="text-sm text-muted" style="margin-bottom: var(--sp-4);">${escapeHtml(loan.lender || '')} · ${loan.interestRate}% p.a. · ${loan.status === 'closed' ? 'Closed' : 'Active'}</p>
-      <div style="margin-bottom: var(--sp-4);">
+      <p class="text-sm text-muted mb-4">${escapeHtml(loan.lender || '')} · ${loan.interestRate}% p.a. · ${loan.status === 'closed' ? 'Closed' : 'Active'}</p>
+      <div class="mb-4">
         <span class="stat-label">Remaining</span><br/>
         <span class="amount amount--lg num amount--out">${formatCurrency(progress.remainingAmount)}</span>
       </div>
       <div class="summary-list">
         <div class="summary-row"><span class="summary-label">Progress</span><span class="summary-value num">${progress.paidCount}/${progress.totalCount} installments</span></div>
       </div>
-      <div class="list">${scheduleHtml}</div>
-      ${installments.length > 12 ? `<p class="text-xs text-faint" style="margin-top:var(--sp-2);">Showing first 12 of ${installments.length} installments.</p>` : ''}
+      <div class="list" id="loan-schedule-list"></div>
+      <div id="loan-schedule-pagination" class="mt-3"></div>
     `,
     actions: [
       ...(loan.status !== 'closed' ? [
@@ -215,24 +291,34 @@ async function openLoanDetail(id) {
       { label: 'Close', variant: 'btn-ghost', onClick: (close) => close() },
     ],
     onMount: (root) => {
-      root.querySelectorAll('[data-inst]').forEach((row) => {
-        bindRowActivation(row, async () => {
-          const inst = installments.find((i) => i.id === row.dataset.inst);
-          const ok = await confirmDialog({
-            title: `Reverse EMI #${inst.installmentNumber}`, danger: true, confirmLabel: 'Reverse',
-            message: 'This undoes the payment and marks the installment pending again.',
-          });
-          if (ok) {
-            try {
-              await reverseEmiPayment(inst.paidTransactionId);
-              toast.success('EMI payment reversed.');
-              refresh();
-            } catch (err) {
-              toast.error(err instanceof ValidationError ? err.message : 'Could not reverse this EMI.');
+      const renderSchedulePage = () => {
+        const totalPages = Math.max(1, Math.ceil(installments.length / INSTALLMENT_PAGE_SIZE));
+        installmentPage = Math.min(installmentPage, totalPages);
+        const pageItems = installments.slice((installmentPage - 1) * INSTALLMENT_PAGE_SIZE, installmentPage * INSTALLMENT_PAGE_SIZE);
+
+        qs('#loan-schedule-list', root).innerHTML = pageItems.map(scheduleRow).join('');
+        renderPagination(qs('#loan-schedule-pagination', root), installmentPage, totalPages, (newPage) => { installmentPage = newPage; renderSchedulePage(); });
+
+        root.querySelectorAll('[data-inst]').forEach((row) => {
+          bindRowActivation(row, async () => {
+            const inst = installments.find((i) => i.id === row.dataset.inst);
+            const ok = await confirmDialog({
+              title: `Reverse EMI #${inst.installmentNumber}`, danger: true, confirmLabel: 'Reverse',
+              message: 'This undoes the payment and marks the installment pending again.',
+            });
+            if (ok) {
+              try {
+                await reverseEmiPayment(inst.paidTransactionId);
+                toast.success('EMI payment reversed.');
+                refresh();
+              } catch (err) {
+                toast.error(err instanceof ValidationError ? err.message : 'Could not reverse this EMI.');
+              }
             }
-          }
+          });
         });
-      });
+      };
+      renderSchedulePage();
     },
   });
 }
@@ -248,7 +334,7 @@ async function openPayModal(loan, installment) {
   openModal({
     title: `Pay EMI #${installment.installmentNumber}`,
     bodyHtml: `
-      <p class="text-sm" style="margin-bottom: var(--sp-3);">Amount: <strong>${formatCurrency(installment.amount)}</strong></p>
+      <p class="text-sm mb-3">Amount: <strong>${formatCurrency(installment.amount)}</strong></p>
       <div class="field">
         <label for="pay-account">Pay from</label>
         <select class="select" id="pay-account">${options}</select>

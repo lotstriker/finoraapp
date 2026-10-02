@@ -1,23 +1,32 @@
 // ==========================================================================
 // Finora — utils/theme.js
-// Two independent preferences, both allowed in localStorage (small UI
-// preferences only — see 02 - Technology & Architecture):
-//   1. Structural theme: 'light' | 'dark' | 'system'
-//   2. Color theme: which accent-color palette to use (works with any of
-//      the three structural themes above).
+// A SINGLE theme selection stored as one attribute (data-theme) — Light,
+// Dark, System, or one of 5 named creative themes. Because only one
+// value can ever be set at a time, selecting any option is automatically
+// mutually exclusive with every other; there's no way for two themes to
+// be "on" at once (the old two-attribute theme+color-theme design could
+// do that, which was the bug this replaces).
 // ==========================================================================
 
 const THEME_KEY = 'finora.theme';
-const COLOR_THEME_KEY = 'finora.colorTheme';
 
-export const COLOR_THEMES = [
-  { value: 'indigo', label: 'Indigo', swatch: '#4A47E0' },
-  { value: 'emerald', label: 'Emerald', swatch: '#0F9D6B' },
-  { value: 'rose', label: 'Rose', swatch: '#D6336C' },
-  { value: 'amber', label: 'Amber', swatch: '#B45309' },
-  { value: 'ocean', label: 'Ocean', swatch: '#0369A1' },
-  { value: 'graphite', label: 'Graphite', swatch: '#3F3F46' },
+/** Structural options — no visual identity of their own, just light/dark. */
+export const STRUCTURAL_THEMES = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System' },
 ];
+
+/** Named creative themes — each a complete, standalone palette. */
+export const NAMED_THEMES = [
+  { value: 'cyber-teal', label: 'Cyber Teal', swatch: '#00E599' },
+  { value: 'neon-amber', label: 'Neon Amber', swatch: '#FF661A' },
+  { value: 'midnight-gold', label: 'Midnight Gold', swatch: '#FCA311' },
+  { value: 'deep-pine', label: 'Deep Pine', swatch: '#45D49E' },
+  { value: 'ocean-twilight', label: 'Ocean Twilight', swatch: '#00D2FF' },
+];
+
+export const ALL_THEMES = [...STRUCTURAL_THEMES, ...NAMED_THEMES];
 
 export function getTheme() {
   return localStorage.getItem(THEME_KEY) || 'system';
@@ -32,20 +41,6 @@ export function applyTheme(theme = getTheme()) {
   document.documentElement.setAttribute('data-theme', theme);
 }
 
-export function getColorTheme() {
-  return localStorage.getItem(COLOR_THEME_KEY) || 'indigo';
-}
-
-export function setColorTheme(colorTheme) {
-  localStorage.setItem(COLOR_THEME_KEY, colorTheme);
-  applyColorTheme(colorTheme);
-}
-
-export function applyColorTheme(colorTheme = getColorTheme()) {
-  document.documentElement.setAttribute('data-color-theme', colorTheme);
-}
-
 export function initTheme() {
   applyTheme(getTheme());
-  applyColorTheme(getColorTheme());
 }

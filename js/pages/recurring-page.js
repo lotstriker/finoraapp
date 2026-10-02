@@ -76,7 +76,7 @@ function renderDueSection(due, upcoming) {
   `).join('');
 
   el.innerHTML = `
-    ${due.length ? `<h2 style="font-size: var(--fs-md); font-weight: 650; margin-bottom: var(--sp-3);">Due</h2><div class="list">${dueRows}</div>` : ''}
+    ${due.length ? `<h2 class="section-title">Due</h2><div class="list">${dueRows}</div>` : ''}
     ${upcoming.length ? `<h2 style="font-size: var(--fs-md); font-weight: 650; margin: var(--sp-4) 0 var(--sp-3);">Coming Up</h2><div class="list">${upcomingRows}</div>` : ''}
   `;
 
@@ -139,7 +139,7 @@ function openRecordModal(rule) {
     openModal({
       title: `Record ${rule.name}`,
       bodyHtml: `
-        <p class="text-sm" style="margin-bottom: var(--sp-3);">${rule.name} expected — record ${formatCurrency(rule.amount)}?</p>
+        <p class="text-sm mb-3">${rule.name} expected — record ${formatCurrency(rule.amount)}?</p>
         <div class="field">
           <label for="rp-account">Account</label>
           <select class="select" id="rp-account">${options}</select>
@@ -229,7 +229,7 @@ async function openCreateModal() {
             <option value="yearly">Yearly</option>
           </select>
         </div>
-        <div class="field" id="r-interval-field" style="display:none;">
+        <div class="field hidden" id="r-interval-field">
           <label for="r-interval">Validity (days)</label>
           <input class="input" id="r-interval" type="number" min="1" step="1" placeholder="e.g. 28" />
         </div>
@@ -249,8 +249,8 @@ async function openCreateModal() {
       await loadCategories();
 
       qs('#r-validity', root).addEventListener('change', (e) => {
-        qs('#r-freq-field', root).style.display = e.target.checked ? 'none' : '';
-        qs('#r-interval-field', root).style.display = e.target.checked ? '' : 'none';
+        qs('#r-freq-field', root).classList.toggle('hidden', e.target.checked);
+        qs('#r-interval-field', root).classList.toggle('hidden', !e.target.checked);
       });
     },
     actions: [

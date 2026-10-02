@@ -26,7 +26,7 @@ export async function renderSearchPage(root) {
       <div class="field" style="max-width:420px;">
         <input class="input" id="search-input" type="text" placeholder="Search accounts, people, committees, loans, transactions…" autofocus />
       </div>
-      <div id="search-results" style="margin-top: var(--sp-5);"></div>
+      <div id="search-results" class="mt-5"></div>
     </div>
   `;
 
@@ -40,7 +40,7 @@ function section(title, rows) {
   if (rows.length === 0) return '';
   return `
     <h2 style="font-size: var(--fs-sm); font-weight: 650; margin-bottom: var(--sp-2); color: var(--color-text-muted);">${title}</h2>
-    <div class="list" style="margin-bottom: var(--sp-4);">
+    <div class="list mb-4">
       ${rows.map((r) => `
         <a href="${r.href}" class="list-row">
           <div class="row-icon">${r.icon}</div>

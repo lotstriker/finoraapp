@@ -41,7 +41,7 @@ function stepCurrency(resolve) {
     title: 'Currency',
     bodyHtml: `
       <p class="text-sm">Finora uses the Indian Rupee for all amounts.</p>
-      <div class="card stat-card" style="margin-top: var(--sp-3);">
+      <div class="card stat-card mt-3">
         <span class="stat-label">Currency</span>
         <span class="amount amount--lg num">₹ INR</span>
       </div>
@@ -59,7 +59,7 @@ function stepMainAccount(resolve) {
   openModal({
     title: 'Your Main Account',
     bodyHtml: `
-      <p class="text-sm" style="margin-bottom: var(--sp-3);">Optional — you can always add accounts later. It starts at ₹0; use Add Money afterward if it already holds funds.</p>
+      <p class="text-sm mb-3">Optional — you can always add accounts later. It starts at ₹0; use Add Money afterward if it already holds funds.</p>
       <div class="field">
         <label for="ob-name">Account name</label>
         <input class="input" id="ob-name" type="text" value="Main Account" />
@@ -95,8 +95,8 @@ function stepFeatures(resolve) {
   openModal({
     title: 'Which modules do you need?',
     bodyHtml: `
-      <p class="text-sm" style="margin-bottom: var(--sp-3);">Turn off anything you don't use — you can change this anytime in Settings. Your data is never deleted, just hidden.</p>
-      <div style="display:flex; flex-direction:column; gap: var(--sp-2);">
+      <p class="text-sm mb-3">Turn off anything you don't use — you can change this anytime in Settings. Your data is never deleted, just hidden.</p>
+      <div class="flex-col">
         ${OPTIONAL_MODULES.map((m) => `
           <label style="display:flex; align-items:center; gap: var(--sp-2); font-size: var(--fs-sm);">
             <input type="checkbox" data-module="${m}" checked /> ${MODULE_LABELS[m]}

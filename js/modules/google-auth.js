@@ -21,7 +21,7 @@
 // setup notes) — it is a PUBLIC identifier, not a secret. Google's own
 // security model for browser apps relies on the Authorized JavaScript
 // Origins allow-list configured in Cloud Console, not on hiding this ID.
-const CLIENT_ID = 'YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com';
+const CLIENT_ID = '552234148097-aclf2nl1j3n5c9aj0pvcoipnt88886vc.apps.googleusercontent.com';
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.appdata email openid';
 

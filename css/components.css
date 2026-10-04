@@ -89,6 +89,8 @@
 
 .list-row:last-child { border-bottom: none; }
 .list-row.is-clickable:hover { background: var(--color-bg); cursor: pointer; }
+.card.is-clickable { cursor: pointer; transition: box-shadow var(--transition-fast), border-color var(--transition-fast); }
+.card.is-clickable:hover { box-shadow: var(--shadow-md); border-color: var(--color-border-strong); }
 
 .row-icon {
   width: 38px;

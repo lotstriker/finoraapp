@@ -96,21 +96,32 @@ async function refresh() {
     </div>
   `;
 
+  listEl.className = 'grid grid-cards';
   listEl.innerHTML = committees.map((c) => {
     const progress = progressByCommittee[c.id];
+    const pct = progress.totalCycles > 0 ? Math.round((progress.recordedCount / progress.totalCycles) * 100) : 0;
     return `
-      <div class="list-row is-clickable" data-id="${c.id}">
-        <div class="row-icon">${icons.bidsave}</div>
-        <div class="row-main">
-          <div class="row-title">${escapeHtml(c.name)} ${c.status === 'completed' ? '<span class="badge badge-success">Completed</span>' : ''}</div>
-          <div class="row-sub">${c.userMemberships} membership${c.userMemberships > 1 ? 's' : ''} · ${progress.recordedCount}/${progress.totalCycles} cycles</div>
+      <div class="card is-clickable" data-id="${c.id}">
+        <div class="flex-row" style="justify-content:space-between; align-items:flex-start;">
+          <div class="row-icon">${icons.bidsave}</div>
+          ${c.status === 'completed' ? '<span class="badge badge-success">Completed</span>' : ''}
         </div>
-        <span class="amount num amount--in">${formatCurrency(progress.totalSaving)} profit</span>
+        <div class="mt-2" style="font-size:var(--fs-md); font-weight:650;">${escapeHtml(c.name)}</div>
+        <div class="text-xs text-faint mb-3">${c.userMemberships} membership${c.userMemberships > 1 ? 's' : ''} · ${formatCurrency(c.baseContribution)}/cycle</div>
+
+        <div class="summary-list mb-2">
+          <div class="summary-row"><span class="summary-label">Progress</span><span class="summary-value num">${progress.recordedCount}/${progress.totalCycles} cycles</span></div>
+          <div class="summary-row"><span class="summary-label">Profit so far</span><span class="summary-value num amount--in">${formatCurrency(progress.totalSaving)}</span></div>
+        </div>
+
+        <div style="background: var(--color-border); border-radius: 999px; height: 6px; overflow: hidden;">
+          <div style="width: ${pct}%; height: 100%; background: var(--color-primary); border-radius: 999px;"></div>
+        </div>
       </div>
     `;
   }).join('');
 
-  listEl.querySelectorAll('.list-row').forEach((row) => bindRowActivation(row, () => openDetail(row.dataset.id)));
+  listEl.querySelectorAll('.card[data-id]').forEach((card) => bindRowActivation(card, () => openDetail(card.dataset.id)));
 }
 
 function openCreateModal() {

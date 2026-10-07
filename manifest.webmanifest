@@ -1,0 +1,21 @@
+{
+  "name": "Finora — Personal Finance",
+  "short_name": "Finora",
+  "description": "Offline-first personal finance: accounts, loans, committees, budgets and more.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F5F5FC",
+  "theme_color": "#4A47E0",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Add expense", "short_name": "Expense", "url": "./#/expenses?add=1", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Add income", "short_name": "Income", "url": "./#/income?add=1", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

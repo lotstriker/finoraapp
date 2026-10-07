@@ -10,8 +10,8 @@
 // ==========================================================================
 
 import { getAccounts } from '../modules/accounts.js';
-import { getRecentTransactions } from '../core/ledger.js';
-import { getAll } from '../core/db.js';
+import { getRecentTransactions, getLedgerBetween } from '../core/ledger.js';
+import { getNetWorthHistory } from '../modules/insights.js';
 import { getCommittees, getCycles, committeeProgress } from '../modules/committees.js';
 import { getLoans, getInstallments, loanProgress } from '../modules/loans.js';
 import { getGoals } from '../modules/savings.js';
@@ -24,6 +24,8 @@ import { getScheduledTransactions, daysUntil } from '../modules/scheduled.js';
 import { formatCurrency, formatSignedCurrency } from '../utils/currency.js';
 import { formatDate, escapeHtml } from '../utils/dom.js';
 import { icons } from '../utils/icons.js';
+import { signedIncome, signedExpense, isExpenseRelated } from '../utils/ledger-math.js';
+import { roundMoney } from '../utils/currency.js';
 
 function isThisMonth(iso) {
   const d = new Date(iso);
@@ -74,10 +76,13 @@ function txnRow(txn, accountsById) {
 export async function renderDashboard(container) {
   const enabledModules = await getEnabledModules();
   const backupReminder = await getBackupReminderStatus();
+  const now = new Date();
+  const monthStartIso = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const nextMonthIso = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
   const [accounts, recent, allTxns, committees, loans, goals, people] = await Promise.all([
     getAccounts(),
     getRecentTransactions(6),
-    getAll('ledger'),
+    getLedgerBetween(monthStartIso, nextMonthIso),   // this month only (index range), not the whole ledger
     getCommittees(),
     getLoans({ includeClosed: false }),
     getGoals(),
@@ -88,26 +93,30 @@ export async function renderDashboard(container) {
   const accountsById = Object.fromEntries(accounts.map((a) => [a.id, a]));
 
   const monthTxns = allTxns.filter((t) => isThisMonth(t.date));
-  const monthIncome = monthTxns.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const monthExpense = monthTxns.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  // Reversal/refund-aware: a reversed expense must REDUCE expenses, not add to them.
+  const monthIncome = roundMoney(monthTxns.reduce((s, t) => s + signedIncome(t), 0));
+  const monthExpense = roundMoney(monthTxns.reduce((s, t) => s + signedExpense(t), 0));
 
   // Top expense category this month — a genuinely new detail, not shown elsewhere on this page
   const expenseByCategory = {};
-  monthTxns.filter((t) => t.type === 'expense').forEach((t) => {
+  monthTxns.filter(isExpenseRelated).forEach((t) => {
     const cat = t.category || 'Uncategorized';
-    expenseByCategory[cat] = (expenseByCategory[cat] || 0) + t.amount;
+    expenseByCategory[cat] = roundMoney((expenseByCategory[cat] || 0) + signedExpense(t));
   });
-  const topCategory = Object.entries(expenseByCategory).sort((a, b) => b[1] - a[1])[0];
+  const topCategory = Object.entries(expenseByCategory).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])[0];
 
   // Net Worth = accounts + savings goals + people receivable (signed) - loans outstanding
   const totalSavings = goals.reduce((s, g) => s + (g.currentAmount || 0), 0);
   const totalPeopleNet = people.reduce((s, p) => s + (p.balance || 0), 0);
-  let totalLoansOutstanding = 0;
+  let totalLoansOutstanding = 0; // still to pay (shown on the Loans card)
+  let totalLoanPrincipal = 0;    // actually owed today (used for net worth)
   for (const loan of loans) {
     const installments = await getInstallments(loan.id);
-    totalLoansOutstanding += loanProgress(installments).remainingAmount;
+    const lp = loanProgress(installments);
+    totalLoansOutstanding += lp.remainingAmount;
+    totalLoanPrincipal += lp.remainingPrincipal;
   }
-  const netWorth = totalBalance + totalSavings + totalPeopleNet - totalLoansOutstanding;
+  const netWorth = roundMoney(totalBalance + totalSavings + totalPeopleNet - totalLoanPrincipal);
 
   // Bid & Save overview
   const activeCommittees = committees.filter((c) => c.status === 'active');
@@ -202,6 +211,13 @@ export async function renderDashboard(container) {
   }
   attentionItems.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
 
+  // Budget health: most-used budgets first. Always shows the % as TEXT too (not colour alone).
+  const budgetHealth = enabledModules.budgets
+    ? (await getBudgetProgress()).filter((b) => b.monthlyLimit > 0)
+        .map((b) => ({ ...b, pct: Math.round((b.spent / b.monthlyLimit) * 100) }))
+        .sort((a, b) => b.pct - a.pct).slice(0, 4)
+    : [];
+
   container.innerHTML = `
     <div class="page">
       <div class="page-header">
@@ -216,8 +232,17 @@ export async function renderDashboard(container) {
         </div>
       </a>` : ''}
 
+      <div class="card net-worth-hero mb-4">
+        <div class="net-worth-hero-main">
+          <span class="stat-label">Net Worth</span>
+          <span class="amount amount--xl num ${netWorth >= 0 ? 'amount--in' : 'amount--out'}">${formatCurrency(netWorth)}</span>
+          <span class="text-xs text-faint">Accounts + Savings + People − Loans owed</span>
+          <span class="text-sm" id="nw-delta" aria-live="polite"></span>
+        </div>
+        <div class="net-worth-hero-chart" id="nw-spark" aria-hidden="true"></div>
+      </div>
+
       <div class="grid grid-cards mb-6">
-        ${statCard({ label: 'Net Worth', value: formatCurrency(netWorth), valueClass: netWorth >= 0 ? 'amount--in' : 'amount--out', sub: 'Accounts + Savings + People − Loans' })}
         ${statCard({ label: 'Total Balance', value: formatCurrency(totalBalance), sub: `${accounts.length} active account${accounts.length === 1 ? '' : 's'}`, href: '#/accounts' })}
         ${enabledModules.income ? statCard({ label: 'Income · This Month', value: formatCurrency(monthIncome), valueClass: 'amount--in', href: '#/income' }) : ''}
         ${enabledModules.expenses ? statCard({ label: 'Expenses · This Month', value: formatCurrency(monthExpense), valueClass: 'amount--out', sub: topCategory ? `Top: ${escapeHtml(topCategory[0])} (${formatCurrency(topCategory[1])})` : '', href: '#/expenses' }) : ''}
@@ -248,6 +273,16 @@ export async function renderDashboard(container) {
         }) : ''}
       </div>` : ''}
 
+      ${budgetHealth.length ? `
+      <h2 class="section-title">Budget Health</h2>
+      <a href="#/budgets" class="card budget-health mb-6">
+        ${budgetHealth.map((b) => `
+          <div class="budget-health-row">
+            <div class="budget-health-top"><span>${escapeHtml(b.category)}</span><span class="num ${b.overLimit ? 'amount--out' : ''}">${b.overLimit ? `Over by ${formatCurrency(Math.abs(b.remaining))}` : `${b.pct}% used`}</span></div>
+            <div class="budget-health-bar" role="progressbar" aria-label="${escapeHtml(b.category)} budget" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, b.pct)}"><span class="${b.overLimit ? 'is-over' : b.pct >= 80 ? 'is-warn' : ''}" style="width:${Math.min(100, b.pct)}%"></span></div>
+          </div>`).join('')}
+      </a>` : ''}
+
       ${attentionItems.length ? `
       <h2 class="section-title">Needs Attention</h2>
       <div class="list mb-6">
@@ -266,4 +301,35 @@ export async function renderDashboard(container) {
       </div>
     </div>
   `;
+
+  // Net-worth trend loads AFTER the page is on screen (it replays the ledger, so it must not delay first paint).
+  getNetWorthHistory(6).then((history) => {
+    const spark = container.querySelector('#nw-spark');
+    const delta = container.querySelector('#nw-delta');
+    if (!spark || history.length < 2) return;
+    spark.innerHTML = sparkline(history.map((h) => h.netWorth));
+    const change = roundMoney(history[history.length - 1].netWorth - history[history.length - 2].netWorth);
+    if (delta && change !== 0) {
+      delta.className = `text-sm amount--${change > 0 ? 'in' : 'out'}`;
+      delta.textContent = `${change > 0 ? '▲' : '▼'} ${formatCurrency(Math.abs(change))} vs last month`;
+    }
+  }).catch(() => { /* the trend is a bonus; the dashboard works without it */ });
+}
+
+/** Tiny dependency-free trend line (SVG). `values` oldest -> newest. */
+export function sparkline(values, { width = 220, height = 56 } = {}) {
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const pad = 4;
+  const pts = values.map((v, i) => [
+    pad + (i * (width - pad * 2)) / (values.length - 1),
+    height - pad - ((v - min) / span) * (height - pad * 2),
+  ]);
+  const line = pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const [lx, ly] = pts[pts.length - 1];
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" preserveAspectRatio="none" focusable="false">
+    <polyline points="${line}" fill="none" stroke="var(--color-primary)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+    <circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="3.5" fill="var(--color-primary)" />
+  </svg>`;
 }

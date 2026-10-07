@@ -13,6 +13,7 @@ import { getGoals } from './savings.js';
 import { getPeople } from './people.js';
 import { getLoans, getInstallments } from './loans.js';
 import { roundMoney } from '../utils/currency.js';
+import { signedIncome, signedExpense, isExpenseRelated } from '../utils/ledger-math.js';
 
 /** Reconstructs the combined balance of the given accounts as of a past date. */
 function accountsBalanceAsOf(ledger, accountIds, asOfDate) {
@@ -61,9 +62,11 @@ async function loansOutstandingAsOf(loans, asOfDate) {
   for (const loan of loans) {
     if (new Date(loan.startDate) > asOfDate) continue; // loan didn't exist yet
     const installments = await getInstallments(loan.id);
-    const paidByThen = installments.filter((i) => i.paidDate && new Date(i.paidDate) <= asOfDate).reduce((s, i) => s + i.amount, 0);
-    const totalAmount = installments.reduce((s, i) => s + i.amount, 0);
-    total += Math.max(0, totalAmount - paidByThen);
+    // principal only (matches the dashboard): future interest isn't owed yet
+    const part = (i) => i.principalComponent ?? i.amount;
+    const paidByThen = installments.filter((i) => i.paidDate && new Date(i.paidDate) <= asOfDate).reduce((s, i) => s + part(i), 0);
+    const totalPrincipal = installments.reduce((s, i) => s + part(i), 0);
+    total += Math.max(0, totalPrincipal - paidByThen);
   }
   return roundMoney(total);
 }
@@ -107,8 +110,8 @@ export async function getYearOverYearComparison() {
     ledger.forEach((t) => {
       const d = new Date(t.date);
       if (d.getFullYear() !== year) return;
-      if (t.type === 'income') months[d.getMonth()].income += t.amount;
-      else if (t.type === 'expense') months[d.getMonth()].expense += t.amount;
+      months[d.getMonth()].income += signedIncome(t);
+      months[d.getMonth()].expense += signedExpense(t);
     });
     return months;
   };
@@ -139,8 +142,8 @@ export async function getSpendingInsights() {
 
   const byCategory = (from, to) => {
     const map = {};
-    ledger.filter((t) => t.type === 'expense' && new Date(t.date) >= from && new Date(t.date) < to)
-      .forEach((t) => { const cat = t.category || 'Uncategorized'; map[cat] = (map[cat] || 0) + t.amount; });
+    ledger.filter((t) => isExpenseRelated(t) && new Date(t.date) >= from && new Date(t.date) < to)
+      .forEach((t) => { const cat = t.category || 'Uncategorized'; map[cat] = roundMoney((map[cat] || 0) + signedExpense(t)); });
     return map;
   };
 

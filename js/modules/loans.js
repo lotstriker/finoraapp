@@ -46,7 +46,13 @@ export function loanProgress(installments) {
   const paid = installments.filter((i) => i.status === 'paid');
   const paidAmount = paid.reduce((s, i) => s + i.amount, 0);
   const totalAmount = installments.reduce((s, i) => s + i.amount, 0);
-  return { paidCount: paid.length, totalCount: installments.length, paidAmount, totalAmount, remainingAmount: totalAmount - paidAmount };
+  // remainingAmount = everything still to PAY (future interest included).
+  // remainingPrincipal = what you actually OWE today — the right number for net worth,
+  // because interest that hasn't accrued yet is not a liability yet.
+  const remainingPrincipal = roundMoney(
+    installments.filter((i) => i.status !== 'paid').reduce((s, i) => s + (i.principalComponent ?? i.amount), 0)
+  );
+  return { paidCount: paid.length, totalCount: installments.length, paidAmount, totalAmount, remainingAmount: totalAmount - paidAmount, remainingPrincipal };
 }
 
 /**
@@ -165,6 +171,9 @@ export async function payInstallment(loanId, installmentId, { accountId, date } 
     sideEffect: async (tx, record) => {
       const instStore = tx.objectStore('loan_installments');
       const inst = await reqToPromise(instStore.get(installmentId));
+      // Re-checked inside the atomic transaction: the check above ran outside
+      // it, so two quick clicks could both pass it.
+      if (!inst || inst.status === 'paid') throw new ValidationError('This installment is already paid.');
       inst.status = 'paid';
       inst.paidDate = record.date;
       inst.paidTransactionId = record.id;

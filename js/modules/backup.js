@@ -5,14 +5,21 @@
 // (e.g. XOR) encryption.
 // ==========================================================================
 
-import { getAll, ALL_STORES, withTransaction, reqToPromise } from '../core/db.js';
+import { getAll, getById, ALL_STORES, withTransaction, reqToPromise } from '../core/db.js';
+import { nextTransactionId, parseTransactionId, COUNTER_KEY, DEVICE_KEY } from '../core/ids.js';
+import { roundMoney } from '../utils/currency.js';
 import { ValidationError } from '../core/ledger.js';
 import { getSetting, setSetting } from './preferences.js';
 
 const LAST_BACKUP_KEY = 'lastBackupAt';
 const BACKUP_REMINDER_DAYS = 14;
 
-export const PBKDF2_ITERATIONS = 250000;
+// OWASP Password Storage Cheat Sheet: PBKDF2-HMAC-SHA256 => 600,000 iterations.
+// Older backups used 250,000 and store their own count in the container, so
+// decrypt always uses the count written in the file (LEGACY_PBKDF2_ITERATIONS
+// is only the fallback for containers that have no `iterations` field).
+export const PBKDF2_ITERATIONS = 600000;
+export const LEGACY_PBKDF2_ITERATIONS = 250000;
 export const BACKUP_VERSION = 2;
 
 export function bufToBase64(buf) {
@@ -29,11 +36,11 @@ export function base64ToBuf(b64) {
   return bytes.buffer;
 }
 
-export async function deriveKey(password, saltBuf, usage) {
+export async function deriveKey(password, saltBuf, usage, iterations = PBKDF2_ITERATIONS) {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: saltBuf, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: saltBuf, iterations, hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -47,7 +54,65 @@ export async function exportAllStores() {
   for (const name of ALL_STORES) {
     data[name] = await getAll(name);
   }
+  // Device-only bookkeeping (this device's id + its cloud-sync marker) must never
+  // travel inside a backup, or restoring would make two devices look identical.
+  data.settings = (data.settings || []).filter((s) => !DEVICE_LOCAL_KEYS.has(s.key));
   return data;
+}
+
+/* ---------- dataset id: identifies THIS profile's data across devices ---------- */
+export const DATASET_KEY = 'datasetId';
+export const CLOUD_SYNC_KEY = 'cloudSync';
+export const AUTO_SYNC_KEY = 'autoSync';
+export const CLOUD_DIRTY_KEY = 'cloudDirty';
+export const CLOUD_START_FRESH_KEY = 'cloudStartFresh';
+export const E2E_KEY_STORE = 'e2eKey';
+export const SERVER_SYNC_ENABLED_KEY = 'serverSyncEnabled';
+// Per-device state: never exported in backups and never overwritten by a restore.
+const DEVICE_LOCAL_KEYS = new Set([DEVICE_KEY, CLOUD_SYNC_KEY, AUTO_SYNC_KEY, CLOUD_DIRTY_KEY, CLOUD_START_FRESH_KEY, E2E_KEY_STORE, SERVER_SYNC_ENABLED_KEY]);
+
+/**
+ * A random id that names this profile's DATA (not this device). It IS included in
+ * backups, so a phone that restores the PC's backup adopts the same id — and both
+ * then sync to the same cloud file, while a second profile gets its own id and its
+ * own cloud file (it can no longer overwrite the first one's).
+ */
+export async function getDatasetId() {
+  return withTransaction(['settings'], 'readwrite', async (tx) => {
+    const store = tx.objectStore('settings');
+    const existing = await reqToPromise(store.get(DATASET_KEY));
+    if (existing?.value) return existing.value;
+    const bytes = crypto.getRandomValues(new Uint8Array(9));
+    const id = 'ds_' + [...bytes].map((b) => b.toString(36).padStart(2, '0')).join('').slice(0, 12);
+    store.put({ key: DATASET_KEY, value: id });
+    return id;
+  }, { quiet: true });
+}
+
+export async function setDatasetId(id) {
+  return withTransaction(['settings'], 'readwrite', (tx) => { tx.objectStore('settings').put({ key: DATASET_KEY, value: id }); }, { quiet: true });
+}
+
+/** This device's short random id (created on first use). Sent with every sync write so a device can recognise its own echoes. */
+export async function getDeviceId() {
+  return withTransaction(['settings'], 'readwrite', async (tx) => {
+    const store = tx.objectStore('settings');
+    const existing = await reqToPromise(store.get(DEVICE_KEY));
+    if (existing?.value) return existing.value;
+    const device = crypto.getRandomValues(new Uint32Array(1))[0].toString(36).slice(0, 4).padEnd(4, '0');
+    store.put({ key: DEVICE_KEY, value: device });
+    return device;
+  }, { quiet: true });
+}
+
+/** What this device last saw in the cloud: {datasetId, fileId, modifiedTime, at} or null. */
+export async function getCloudSync() {
+  const rec = await getById('settings', CLOUD_SYNC_KEY);
+  return rec?.value || null;
+}
+
+export async function setCloudSync(value) {
+  return withTransaction(['settings'], 'readwrite', (tx) => { tx.objectStore('settings').put({ key: CLOUD_SYNC_KEY, value }); }, { quiet: true });
 }
 
 /**
@@ -125,7 +190,7 @@ export async function decryptBackup(fileText, password) {
   try {
     const salt = base64ToBuf(container.salt);
     const iv = base64ToBuf(container.iv);
-    const key = await deriveKey(password, salt, 'decrypt');
+    const key = await deriveKey(password, salt, 'decrypt', Number(container.iterations) || LEGACY_PBKDF2_ITERATIONS);
     const plaintextBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, base64ToBuf(container.ciphertext));
     const json = new TextDecoder().decode(plaintextBuf);
     const payload = JSON.parse(json);
@@ -139,35 +204,178 @@ export async function decryptBackup(fileText, password) {
   }
 }
 
+const DEVICE_ONLY_SETTINGS = new Set([DEVICE_KEY, COUNTER_KEY, ...DEVICE_LOCAL_KEYS]);
+
+/** Fields that identify "the same ledger row" when two ids collide. */
+function sameLedgerRow(a, b) {
+  return ['createdAt', 'type', 'direction', 'amount', 'date', 'accountId', 'toAccountId', 'personId', 'description']
+    .every((k) => (a[k] ?? null) === (b[k] ?? null));
+}
+
+/** Deep-replaces ids inside an incoming record (exact values + "Reversal of <id>" text). */
+export function remapIds(value, idMap, patterns) {
+  if (typeof value === 'string') {
+    if (idMap.has(value)) return idMap.get(value);
+    let out = value;
+    for (const [oldId, re] of patterns) out = out.replace(re, idMap.get(oldId));
+    return out;
+  }
+  if (Array.isArray(value)) return value.map((v) => remapIds(v, idMap, patterns));
+  if (value && typeof value === 'object') {
+    const o = {};
+    for (const k of Object.keys(value)) o[k] = remapIds(value[k], idMap, patterns);
+    return o;
+  }
+  return value;
+}
+
+function storeGetAll(tx, name) {
+  return reqToPromise(tx.objectStore(name).getAll());
+}
+
 /**
- * Applies a decrypted backup payload to the live database.
- * @param {object} payload the { stores } object from decryptBackup()
- * @param {'replace'|'merge'} mode
- *   replace — every store is cleared, then the backup's records are inserted.
- *   merge   — existing records are kept; incoming records with an ID that
- *             already exists are skipped (never blindly duplicated/overwritten).
+ * Balances are DERIVED from the ledger, which is the source of truth. After a
+ * merge the ledger may contain rows from another device, so every cached
+ * balance (accounts, credit-card usage, people, savings goals) is recomputed
+ * instead of trusting whichever copy of the account record happened to win.
  */
-export async function restoreBackup(payload, mode) {
-  if (!payload?.stores) throw new ValidationError('Backup payload is empty or invalid.');
+export async function recomputeBalancesInTx(tx) {
+  const [ledger, accounts, people, goals] = await Promise.all([
+    storeGetAll(tx, 'ledger'), storeGetAll(tx, 'accounts'), storeGetAll(tx, 'people'), storeGetAll(tx, 'savings_goals'),
+  ]);
+  const acc = new Map(accounts.map((a) => [a.id, 0]));
+  const per = new Map(people.map((p) => [p.id, 0]));
+  const goal = new Map(goals.map((g) => [g.id, 0]));
 
-  return withTransaction(ALL_STORES, 'readwrite', async (tx) => {
-    for (const name of ALL_STORES) {
-      const incoming = payload.stores[name] || [];
-      const store = tx.objectStore(name);
-
-      if (mode === 'replace') {
-        await reqToPromise(store.clear());
-        incoming.forEach((r) => store.put(r));
-      } else {
-        if (incoming.length === 0) continue;
-        const existing = await reqToPromise(store.getAll());
-        const existingIds = new Set(existing.map((r) => r.id ?? r.key));
-        incoming
-          .filter((r) => !existingIds.has(r.id ?? r.key))
-          .forEach((r) => store.put(r));
+  for (const t of ledger) {
+    if (t.direction === 'transfer') {
+      if (acc.has(t.accountId)) acc.set(t.accountId, acc.get(t.accountId) - t.amount);
+      if (acc.has(t.toAccountId)) acc.set(t.toAccountId, acc.get(t.toAccountId) + t.amount);
+    } else {
+      const sign = t.direction === 'in' ? 1 : -1;
+      if (acc.has(t.accountId)) acc.set(t.accountId, acc.get(t.accountId) + sign * t.amount);
+      if (t.personId && per.has(t.personId)) per.set(t.personId, per.get(t.personId) - sign * t.amount);
+      if ((t.type === 'savings_contribution' || t.type === 'savings_withdrawal') && goal.has(t.moduleRef)) {
+        goal.set(t.moduleRef, goal.get(t.moduleRef) - sign * t.amount);
       }
     }
-  });
+  }
+
+  const accStore = tx.objectStore('accounts');
+  for (const a of accounts) {
+    const bal = roundMoney(acc.get(a.id));
+    if (a.type === 'credit_card') { a.usedAmount = roundMoney(-bal); a.balance = bal; } else { a.balance = bal; }
+    accStore.put(a);
+  }
+  const perStore = tx.objectStore('people');
+  for (const p of people) { p.balance = roundMoney(per.get(p.id)); perStore.put(p); }
+  const goalStore = tx.objectStore('savings_goals');
+  for (const g of goals) { g.currentAmount = Math.max(0, roundMoney(goal.get(g.id))); goalStore.put(g); }
+}
+
+/** Makes the ledger counter >= the highest sequence number present for this year. */
+async function syncLedgerCounter(tx, ledgerRows) {
+  const year = new Date().getFullYear();
+  const settings = tx.objectStore('settings');
+  const cur = await reqToPromise(settings.get(COUNTER_KEY));
+  let max = cur && cur.year === year ? cur.seq : 0;
+  for (const r of ledgerRows) {
+    const p = parseTransactionId(r.id);
+    if (p && p.year === year && p.seq > max) max = p.seq;
+  }
+  settings.put({ key: COUNTER_KEY, year, seq: max });
+}
+
+/**
+ * Applies a decrypted backup payload to the live database — ONE atomic
+ * transaction, so a failure part-way leaves the old data untouched.
+ *
+ *   replace — every store is cleared, then the backup's records are inserted.
+ *             This device's own `deviceId` is kept so new ids stay unique.
+ *   merge   — existing records are kept. For the ledger:
+ *               * identical row already present  -> skipped (idempotent re-restore)
+ *               * same id but DIFFERENT row (two devices both issued
+ *                 TXN-2026-000001) -> the incoming row gets a fresh id and every
+ *                 reference to it is remapped, instead of being silently dropped
+ *               * the id counter is synced so new transactions can never
+ *                 overwrite imported ones
+ *             Categories/budgets already present by name are not duplicated.
+ *             All cached balances are recomputed from the merged ledger.
+ *   Known limit: if the SAME record (e.g. one loan installment) was changed on
+ *   both devices, the local copy wins — merge is for additive data. Use Replace
+ *   when you want one device to become an exact copy of the other.
+ */
+export async function restoreBackup(payload, mode, { quiet = false } = {}) {
+  if (!payload?.stores) throw new ValidationError('Backup payload is empty or invalid.');
+  if (mode !== 'replace' && mode !== 'merge') throw new ValidationError('Unknown restore mode.');
+
+  return withTransaction([...ALL_STORES, 'sync_meta'], 'readwrite', async (tx) => {
+    if (mode === 'replace') {
+      const keepLocal = await Promise.all([...DEVICE_LOCAL_KEYS].map((k) => reqToPromise(tx.objectStore('settings').get(k))));
+      for (const name of ALL_STORES) {
+        const store = tx.objectStore(name);
+        await reqToPromise(store.clear());
+        (payload.stores[name] || []).forEach((r) => {
+          if (name === 'settings' && DEVICE_LOCAL_KEYS.has(r.key)) return;
+          store.put(r);
+        });
+      }
+      keepLocal.filter(Boolean).forEach((r) => tx.objectStore('settings').put(r));
+      // Replacing the data invalidates server-sync bookkeeping (see deleteAllData) — start it afresh.
+      await reqToPromise(tx.objectStore('sync_meta').clear());
+      await syncLedgerCounter(tx, payload.stores.ledger || []);
+      await recomputeBalancesInTx(tx);
+      return;
+    }
+
+    // ---- merge ----
+    const incomingLedger = (payload.stores.ledger || []).map((r) => ({ ...r }));
+    const localLedger = await storeGetAll(tx, 'ledger');
+    const localById = new Map(localLedger.map((r) => [r.id, r]));
+
+    await syncLedgerCounter(tx, [...localLedger, ...incomingLedger]);
+
+    const idMap = new Map();
+    const ledgerToInsert = [];
+    for (const r of incomingLedger) {
+      const existing = localById.get(r.id);
+      if (!existing) { ledgerToInsert.push(r); continue; }
+      if (sameLedgerRow(existing, r)) continue; // already here
+      idMap.set(r.id, await nextTransactionId(tx)); // two DIFFERENT rows share one id
+      ledgerToInsert.push(r);
+    }
+    const patterns = [...idMap.keys()].map((oldId) => [oldId, new RegExp(`${oldId}(?![\\w-])`, 'g')]);
+
+    const ledgerStore = tx.objectStore('ledger');
+    ledgerToInsert.forEach((r) => {
+      const fixed = idMap.size ? remapIds(r, idMap, patterns) : r;
+      ledgerStore.put(fixed);
+    });
+
+    for (const name of ALL_STORES) {
+      if (name === 'ledger') continue;
+      const incoming = payload.stores[name] || [];
+      if (incoming.length === 0) continue;
+      const store = tx.objectStore(name);
+      const existing = await reqToPromise(store.getAll());
+      const existingIds = new Set(existing.map((r) => r.id ?? r.key));
+      const existingNames = new Set(
+        name === 'categories' ? existing.map((c) => `${c.kind}:${c.name.toLowerCase()}`)
+        : name === 'budgets' ? existing.map((b) => b.category) : []
+      );
+
+      for (const raw of incoming) {
+        const key = raw.id ?? raw.key;
+        if (existingIds.has(key)) continue;
+        if (name === 'settings' && DEVICE_ONLY_SETTINGS.has(raw.key)) continue;
+        if (name === 'categories' && existingNames.has(`${raw.kind}:${raw.name.toLowerCase()}`)) continue;
+        if (name === 'budgets' && existingNames.has(raw.category)) continue;
+        store.put(idMap.size ? remapIds(raw, idMap, patterns) : raw);
+      }
+    }
+
+    await recomputeBalancesInTx(tx);
+  }, { quiet });
 }
 
 /**
@@ -176,10 +384,14 @@ export async function restoreBackup(payload, mode) {
  * responsible for a strong confirmation step before calling this.
  */
 export async function deleteAllData() {
-  return withTransaction(ALL_STORES, 'readwrite', async (tx) => {
+  return withTransaction([...ALL_STORES, 'sync_meta'], 'readwrite', async (tx) => {
     for (const name of ALL_STORES) {
       await reqToPromise(tx.objectStore(name).clear());
     }
+    // Forget the server-sync bookkeeping too. If it survived, the sync engine would read "records I synced
+    // are now missing" as "the user deleted them" and push tombstones that wipe every OTHER device's data.
+    // Wiping this device is a local act; the data simply comes back from the server on the next sync.
+    await reqToPromise(tx.objectStore('sync_meta').clear());
   });
 }
 
@@ -201,8 +413,12 @@ export function downloadTextFile(filename, text, mimeType = 'application/json') 
 
 function toCsv(rows, columns) {
   const escape = (v) => {
-    const s = String(v ?? '');
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    let s = String(v ?? '');
+    // CSV/formula injection (OWASP): a TEXT cell that starts with = + - @ (or tab/CR)
+    // is executed as a formula by Excel/Sheets. A leading tab neutralises it.
+    // Real numbers are left alone so "-250.00" amounts stay numeric.
+    if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `\t${s}`;
+    return /[",\n\t\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const header = columns.map((c) => escape(c.label)).join(',');
   const lines = rows.map((row) => columns.map((c) => escape(c.get(row))).join(','));
@@ -212,7 +428,50 @@ function toCsv(rows, columns) {
 /**
  * @param {'transactions'|'income'|'expenses'} kind
  */
+const localDay = (iso) => (iso ? new Date(iso).toLocaleDateString('en-CA') : '');   // local date, not the UTC one
+
+/** Builds the CSV text for the non-transaction exports (accounts / loans / people / goals). */
+export async function buildListCsv(kind) {
+  if (kind === 'accounts') {
+    const accounts = await getAll('accounts');
+    return toCsv(accounts, [
+      { label: 'Name', get: (a) => a.name }, { label: 'Type', get: (a) => a.type },
+      { label: 'Balance', get: (a) => a.balance }, { label: 'Credit Limit', get: (a) => a.creditLimit ?? '' },
+      { label: 'Used (credit card)', get: (a) => a.usedAmount ?? '' }, { label: 'Archived', get: (a) => (a.archived ? 'yes' : 'no') },
+    ]);
+  }
+  if (kind === 'loans') {
+    const [loans, installments] = await Promise.all([getAll('loans'), getAll('loan_installments')]);
+    const loanName = Object.fromEntries(loans.map((l) => [l.id, l.name]));
+    return toCsv(installments.sort((a, b) => (loanName[a.loanId] || '').localeCompare(loanName[b.loanId] || '') || a.installmentNumber - b.installmentNumber), [
+      { label: 'Loan', get: (i) => loanName[i.loanId] || '' }, { label: 'Installment #', get: (i) => i.installmentNumber },
+      { label: 'Due Date', get: (i) => localDay(i.dueDate) }, { label: 'EMI', get: (i) => i.amount },
+      { label: 'Principal', get: (i) => i.principalComponent ?? '' }, { label: 'Interest', get: (i) => i.interestComponent ?? '' },
+      { label: 'Status', get: (i) => i.status }, { label: 'Paid On', get: (i) => localDay(i.paidDate) },
+    ]);
+  }
+  if (kind === 'people') {
+    const people = await getAll('people');
+    return toCsv(people, [
+      { label: 'Name', get: (p) => p.name }, { label: 'Phone', get: (p) => p.phone || '' }, { label: 'Email', get: (p) => p.email || '' },
+      { label: 'Balance (positive = they owe you)', get: (p) => p.balance }, { label: 'Notes', get: (p) => p.notes || '' },
+    ]);
+  }
+  if (kind === 'goals') {
+    const goals = await getAll('savings_goals');
+    return toCsv(goals, [
+      { label: 'Goal', get: (g) => g.name }, { label: 'Target', get: (g) => g.targetAmount }, { label: 'Saved', get: (g) => g.currentAmount },
+      { label: 'Target Date', get: (g) => localDay(g.targetDate) }, { label: 'Priority', get: (g) => g.priority || '' },
+    ]);
+  }
+  throw new ValidationError('Unknown export type.');
+}
+
 export async function exportCsv(kind) {
+  if (['accounts', 'loans', 'people', 'goals'].includes(kind)) {
+    downloadTextFile(`finora-${kind}-${localDay(new Date().toISOString())}.csv`, await buildListCsv(kind), 'text/csv');
+    return;
+  }
   const [all, accounts, people] = await Promise.all([
     getAll('ledger'), getAll('accounts'), getAll('people'),
   ]);
@@ -225,7 +484,7 @@ export async function exportCsv(kind) {
 
   const csv = toCsv(rows.sort((a, b) => new Date(b.date) - new Date(a.date)), [
     { label: 'Transaction ID', get: (r) => r.id },
-    { label: 'Date', get: (r) => new Date(r.date).toISOString().slice(0, 10) },
+    { label: 'Date', get: (r) => localDay(r.date) },
     { label: 'Type', get: (r) => r.type },
     { label: 'Module', get: (r) => r.module || '' },
     { label: 'Account', get: (r) => accountsById[r.accountId] || '' },
@@ -239,5 +498,5 @@ export async function exportCsv(kind) {
     { label: 'Parent Transaction ID', get: (r) => r.parentTransactionId || '' },
   ]);
 
-  downloadTextFile(`finora-${kind}-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
+  downloadTextFile(`finora-${kind}-${localDay(new Date().toISOString())}.csv`, csv, 'text/csv');
 }

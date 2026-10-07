@@ -10,14 +10,27 @@
 
 import { getAll } from '../core/db.js';
 import { getAccounts } from '../modules/accounts.js';
-import { formatCurrency } from '../utils/currency.js';
-import { formatDate, escapeHtml, qs, bindRowActivation } from '../utils/dom.js';
+import { formatCurrency, roundMoney } from '../utils/currency.js';
+import { formatDate, escapeHtml, qs, bindRowActivation, enhanceTabs } from '../utils/dom.js';
 import { openModal } from '../core/modal.js';
 import { getNetWorthHistory, getYearOverYearComparison, getSpendingInsights } from '../modules/insights.js';
 import { icons } from '../utils/icons.js';
 import { toast } from '../core/toast.js';
+import { signedIncome, signedExpense, isIncomeRelated, isExpenseRelated, liveExpenses } from '../utils/ledger-math.js';
 
-const CHART_COLORS = ['#4A47E0', '#0F9D6B', '#D6336C', '#B45309', '#0369A1', '#8B5CF6', '#DB2777', '#059669', '#D97706', '#0284C7'];
+// Colour-blind-safe (Okabe-Ito family); each is >= 3:1 against both white and the dark surface.
+const CHART_COLORS = ['#0072B2', '#D55E00', '#009E73', '#CC79A7', '#7A5195', '#B8860B', '#6B6B6B', '#3B9AD9', '#B5359B', '#2A9D8F'];
+
+let chartSeq = 0;
+
+/** Every chart gets a text twin: screen readers and anyone who can't tell the colours apart can read the numbers. */
+function chartDataTable(headers, rows) {
+  if (!rows.length) return '';
+  return `<details class="chart-data"><summary>View as table</summary><table>
+    <thead><tr>${headers.map((h, i) => `<th class="${i ? 'num' : ''}">${escapeHtml(h)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="${i ? 'num' : ''}">${escapeHtml(String(c))}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></details>`;
+}
 
 /** Renders a donut chart as an SVG string. data: [{label, value}], already sorted desc. */
 function donutChart(data, { size = 180, thickness = 26 } = {}) {
@@ -31,7 +44,7 @@ function donutChart(data, { size = 180, thickness = 26 } = {}) {
     const frac = d.value / total;
     const dash = frac * circumference;
     const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${CHART_COLORS[i % CHART_COLORS.length]}"
-      stroke-width="${thickness}" stroke-dasharray="${dash} ${circumference - dash}"
+      stroke-width="${thickness}" stroke-dasharray="${Math.max(0, dash - 1.5)} ${circumference - Math.max(0, dash - 1.5)}"
       stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" />`;
     offset += dash;
     return seg;
@@ -60,18 +73,22 @@ function trendBarChart(buckets, { width = 600, height = 200 } = {}) {
   const groupW = chartW / n;
   const barW = Math.min(16, groupW / 3);
 
+  const hatchId = `hatch-${++chartSeq}`;
   const bars = buckets.map((b, i) => {
     const groupX = padding + i * groupW + groupW / 2;
     const incomeH = (b.income / maxVal) * (chartH - 10);
     const expenseH = (b.expense / maxVal) * (chartH - 10);
     return `
-      <rect x="${groupX - barW - 2}" y="${chartH - incomeH}" width="${barW}" height="${Math.max(incomeH, 0)}" fill="var(--color-success)" rx="2" />
-      <rect x="${groupX + 2}" y="${chartH - expenseH}" width="${barW}" height="${Math.max(expenseH, 0)}" fill="var(--color-danger)" rx="2" />
+      <rect x="${groupX - barW - 2}" y="${chartH - incomeH}" width="${barW}" height="${Math.max(incomeH, 0)}" fill="var(--chart-income)" rx="2" />
+      <rect x="${groupX + 2}" y="${chartH - expenseH}" width="${barW}" height="${Math.max(expenseH, 0)}" fill="url(#${hatchId})" stroke="var(--chart-expense)" stroke-width="1" rx="2" />
       <text x="${groupX}" y="${height - 8}" text-anchor="middle" font-size="10" fill="var(--color-text-faint)">${escapeHtml(b.label)}</text>
     `;
   }).join('');
 
-  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Income vs expense trend chart" preserveAspectRatio="xMidYMid meet">
+  const totalA = buckets.reduce((s, b) => s + b.income, 0);
+  const totalB = buckets.reduce((s, b) => s + b.expense, 0);
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Bar chart of ${buckets.length} periods. First series total ${Math.round(totalA)}, second series total ${Math.round(totalB)}. A table with every value follows the chart." preserveAspectRatio="xMidYMid meet">
+    <defs><pattern id="${hatchId}" patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--chart-expense)" /><line x1="0" y1="0" x2="0" y2="5" stroke="var(--color-surface)" stroke-width="2" /></pattern></defs>
     <line x1="${padding}" y1="${chartH}" x2="${width - padding}" y2="${chartH}" stroke="var(--color-border)" stroke-width="1" />
     ${bars}
   </svg>`;
@@ -143,8 +160,9 @@ function buildTrendBuckets(start, end, incomeTxns, expenseTxns) {
   }
 
   const buckets = Array.from({ length: bucketCount }, (_, i) => ({ label: formatLabel(i), income: 0, expense: 0 }));
-  incomeTxns.forEach((t) => { const idx = bucketFn(new Date(t.date)); if (buckets[idx]) buckets[idx].income += t.amount; });
-  expenseTxns.forEach((t) => { const idx = bucketFn(new Date(t.date)); if (buckets[idx]) buckets[idx].expense += t.amount; });
+  incomeTxns.forEach((t) => { const idx = bucketFn(new Date(t.date)); if (buckets[idx]) buckets[idx].income += signedIncome(t); });
+  expenseTxns.forEach((t) => { const idx = bucketFn(new Date(t.date)); if (buckets[idx]) buckets[idx].expense += signedExpense(t); });
+  buckets.forEach((b) => { b.income = Math.max(0, b.income); b.expense = Math.max(0, b.expense); });
   return buckets;
 }
 
@@ -246,6 +264,8 @@ export async function renderReportsPage(root) {
     });
   });
 
+  enhanceTabs(root);
+
   const periodSelect = qs('#rpt-period', root);
   periodSelect.value = period;
   periodSelect.addEventListener('change', () => {
@@ -274,7 +294,8 @@ async function renderNetWorthTab(panel) {
       <span class="amount amount--lg num ${latest.netWorth >= 0 ? 'amount--in' : 'amount--out'}">${formatCurrency(latest.netWorth)}</span>
     </div>
     <p class="text-sm text-muted mb-4">${change >= 0 ? 'Up' : 'Down'} ${formatCurrency(Math.abs(change))} over the last ${history.length} months</p>
-    <div class="card">${lineChart(history.map((h) => ({ label: h.label, value: h.netWorth })))}</div>
+    <div class="card">${lineChart(history.map((h) => ({ label: h.label, value: h.netWorth })))}
+      ${chartDataTable(['Month', 'Net worth'], history.map((h) => [h.label, formatCurrency(h.netWorth)]))}</div>
     <p class="text-xs text-faint mt-2">Reconstructed from your account, savings, people, and loan history — not a stored snapshot, so it always reflects corrections and reversals.</p>
   `;
 }
@@ -293,10 +314,11 @@ async function renderYoYTab(panel) {
 
   panel.innerHTML = `
     <p class="text-sm text-muted mb-4">Expenses: ${thisYear} vs ${lastYear}</p>
-    <div class="card mb-4">${trendBarChart(data.map((m) => ({ label: m.label, income: m.thisYearExpense, expense: m.lastYearExpense })), { height: 200 })}</div>
+    <div class="card mb-4">${trendBarChart(data.map((m) => ({ label: m.label, income: m.thisYearExpense, expense: m.lastYearExpense })), { height: 200 })}
+      ${chartDataTable(['Month', String(thisYear), String(lastYear)], data.filter((m) => m.thisYearExpense || m.lastYearExpense).map((m) => [m.label, formatCurrency(m.thisYearExpense), formatCurrency(m.lastYearExpense)]))}</div>
     <div class="flex-row mt-2 mb-4">
-      <span class="chart-legend-swatch" style="background:var(--color-success);"></span><span class="text-xs text-muted">${thisYear}</span>
-      <span class="chart-legend-swatch" style="background:var(--color-danger); margin-left: var(--sp-3);"></span><span class="text-xs text-muted">${lastYear}</span>
+      <span class="chart-legend-swatch chart-legend-swatch--income"></span><span class="text-xs text-muted">${thisYear}</span>
+      <span class="chart-legend-swatch chart-legend-swatch--expense" style="margin-left: var(--sp-3);"></span><span class="text-xs text-muted">${lastYear}</span>
     </div>
     <div class="list">
       ${data.filter((m) => m.thisYearExpense || m.lastYearExpense).map((m) => {
@@ -350,23 +372,25 @@ async function refresh() {
   });
   const accountsById = Object.fromEntries(accounts.map((a) => [a.id, a]));
 
-  const incomeTxns = inRange.filter((t) => t.type === 'income');
-  const expenseTxns = inRange.filter((t) => t.type === 'expense');
-  const totalIncome = incomeTxns.reduce((s, t) => s + t.amount, 0);
-  const totalExpense = expenseTxns.reduce((s, t) => s + t.amount, 0);
+  // Reversal/refund-aware totals (a reversed expense cancels out instead of adding).
+  const incomeTxns = inRange.filter(isIncomeRelated);
+  const expenseTxns = inRange.filter(isExpenseRelated);
+  const totalIncome = roundMoney(incomeTxns.reduce((s, t) => s + signedIncome(t), 0));
+  const totalExpense = roundMoney(expenseTxns.reduce((s, t) => s + signedExpense(t), 0));
 
-  const byCategory = (txns) => {
+  const byCategory = (txns, signer) => {
     const map = {};
     txns.forEach((t) => {
       const key = t.category || 'Uncategorized';
-      map[key] = (map[key] || 0) + t.amount;
+      map[key] = roundMoney((map[key] || 0) + signer(t));
     });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+    return Object.entries(map).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   };
 
-  const expenseByCategory = byCategory(expenseTxns);
-  const incomeByCategory = byCategory(incomeTxns);
-  const topExpenses = [...expenseTxns].sort((a, b) => b.amount - a.amount).slice(0, 10);
+  const expenseByCategory = byCategory(expenseTxns, signedExpense);
+  const incomeByCategory = byCategory(incomeTxns, signedIncome);
+  // Top Expenses: only live originals (not reversed ones, not reversal/refund rows).
+  const topExpenses = liveExpenses(inRange).sort((a, b) => b.amount - a.amount).slice(0, 10);
   const trendBuckets = buildTrendBuckets(start, end, incomeTxns, expenseTxns);
 
   const accountActivity = accounts.map((a) => {
@@ -403,9 +427,10 @@ async function refresh() {
     <h2 class="section-title">Income vs Expense Trend</h2>
     <div class="card mb-6">
       ${trendBarChart(trendBuckets)}
+      ${chartDataTable(['Period', 'Income', 'Expense'], trendBuckets.filter((b) => b.income || b.expense).map((b) => [b.label, formatCurrency(b.income), formatCurrency(b.expense)]))}
       <div class="flex-row mt-2">
-        <span class="chart-legend-swatch" style="background:var(--color-success);"></span><span class="text-xs text-muted">Income</span>
-        <span class="chart-legend-swatch" style="background:var(--color-danger); margin-left: var(--sp-3);"></span><span class="text-xs text-muted">Expense</span>
+        <span class="chart-legend-swatch chart-legend-swatch--income"></span><span class="text-xs text-muted">Income</span>
+        <span class="chart-legend-swatch chart-legend-swatch--expense" style="margin-left: var(--sp-3);"></span><span class="text-xs text-muted">Expense</span>
       </div>
     </div>` : ''}
 

@@ -15,6 +15,7 @@ import { icons } from '../utils/icons.js';
 import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 
+import { dateInputToIso } from '../utils/date.js';
 let container = null;
 
 export async function renderPeoplePage(root, params) {
@@ -274,7 +275,7 @@ async function openMoneyModal(person, actionKey) {
           const description = qs('#mm-desc', root).value;
           const purpose = isDebtCreating ? qs('#mm-purpose', root).value : undefined;
           const dueVal = isDebtCreating ? qs('#mm-due', root).value : '';
-          const dueDate = dueVal ? new Date(dueVal).toISOString() : undefined;
+          const dueDate = dateInputToIso(dueVal);
           const tags = isDebtCreating ? qs('#mm-tags', root).value.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
           const settlesTransactionId = (isRepayment && outstanding.length > 0) ? (qs('#mm-settles', root).value || undefined) : undefined;
           try {

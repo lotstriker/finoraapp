@@ -13,6 +13,7 @@ import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 import { ValidationError } from '../core/ledger.js';
 
+import { dateInputToIso } from '../utils/date.js';
 let container = null;
 
 export async function renderScheduledPage(root) {
@@ -71,7 +72,7 @@ function scheduledRow(s) {
 
 async function openActionsModal(item) {
   openModal({
-    title: escapeHtml(item.description || item.category || item.type),
+    title: item.description || item.category || item.type,
     bodyHtml: `
       <p class="text-sm text-muted mb-0">Scheduled for ${formatDate(item.scheduledDate)} · ${formatCurrency(item.amount)}</p>
     `,
@@ -154,7 +155,7 @@ async function openScheduledModal() {
         onClick: async (close, root) => {
           const type = qs('#sc-type', root).value;
           const scheduledDateVal = qs('#sc-date', root).value;
-          const scheduledDate = scheduledDateVal ? new Date(scheduledDateVal).toISOString() : '';
+          const scheduledDate = dateInputToIso(scheduledDateVal) || '';
           const amount = Number(qs('#sc-amount', root).value);
           const accountId = qs('#sc-account', root).value;
           const toAccountId = type === 'transfer' ? qs('#sc-to-account', root).value : undefined;

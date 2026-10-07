@@ -14,6 +14,7 @@ import { getPeople, getOutstandingLendings, dueDateStatus } from './people.js';
 import { getBudgetProgress } from './budgets.js';
 import { getScheduledTransactions, daysUntil } from './scheduled.js';
 import { formatCurrency } from '../utils/currency.js';
+import { todayLocal } from '../utils/date.js';
 
 const NOTIFS_ENABLED_KEY = 'notificationsEnabled';
 const NOTIFIED_LOG_KEY = 'notifiedLog'; // { [dedupeKey]: 'YYYY-MM-DD' }
@@ -40,7 +41,22 @@ export async function setNotificationsEnabled(enabled) {
 }
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  return todayLocal();
+}
+
+/**
+ * Shows one notification. Chrome on Android refuses `new Notification()` ("Illegal
+ * constructor") and only allows ServiceWorkerRegistration.showNotification(), so try
+ * the service worker first and fall back to the constructor (desktop without a SW).
+ * Returns true if something was shown — never throws.
+ */
+export async function showNotification(title, options = {}) {
+  const opts = { icon: 'assets/icons/icon-192.png', badge: 'assets/icons/favicon-32.png', ...options };
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration?.();
+    if (reg?.showNotification) { await reg.showNotification(title, opts); return true; }
+  } catch { /* fall through to the constructor */ }
+  try { new Notification(title, opts); return true; } catch { return false; }
 }
 
 /** Collects every item worth notifying about right now, each with a stable id for dedupe. */
@@ -117,11 +133,19 @@ export async function checkAndNotify() {
 
   for (const item of items) {
     if (log[item.key] === today) continue; // already notified today
-    new Notification(item.title, { body: item.body, tag: item.key });
-    log[item.key] = today;
-    firedCount += 1;
+    // Only mark as notified if it was really shown, so a failure is retried next time
+    // (before, one thrown error silently stopped everything and nothing was logged).
+    if (await showNotification(item.title, { body: item.body, tag: item.key })) {
+      log[item.key] = today;
+      firedCount += 1;
+    }
   }
 
-  if (firedCount > 0) await setSetting(NOTIFIED_LOG_KEY, log);
+  // forget entries older than 14 days so the log doesn't grow for ever
+  const cutoff = new Date(Date.now() - 14 * 86400000).toLocaleDateString('en-CA');
+  let pruned = false;
+  for (const k of Object.keys(log)) if (log[k] < cutoff) { delete log[k]; pruned = true; }
+
+  if (firedCount > 0 || pruned) await setSetting(NOTIFIED_LOG_KEY, log);
   return firedCount;
 }

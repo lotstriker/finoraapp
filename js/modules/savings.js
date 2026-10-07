@@ -10,6 +10,7 @@
 import { withTransaction, reqToPromise, getAll, getById } from '../core/db.js';
 import { createTransaction, reverseTransaction, ValidationError } from '../core/ledger.js';
 import { newId } from '../core/ids.js';
+import { roundMoney } from '../utils/currency.js';
 
 export async function getGoals({ includeArchived = false } = {}) {
   const all = await getAll('savings_goals');
@@ -80,7 +81,7 @@ export async function contribute(goalId, { accountId, amount, description, date 
       const goalStore = tx.objectStore('savings_goals');
       const goal = await reqToPromise(goalStore.get(goalId));
       if (!goal) throw new ValidationError('Savings goal not found.');
-      goal.currentAmount = (goal.currentAmount || 0) + amt;
+      goal.currentAmount = roundMoney((goal.currentAmount || 0) + amt);
       goalStore.put(goal);
 
       tx.objectStore('savings_contributions').put({
@@ -114,7 +115,9 @@ export async function withdraw(goalId, { accountId, amount, description, date })
     sideEffect: async (tx, record) => {
       const goalStore = tx.objectStore('savings_goals');
       const g = await reqToPromise(goalStore.get(goalId));
-      g.currentAmount = Math.max(0, (g.currentAmount || 0) - amt);
+      if (!g) throw new ValidationError('Savings goal not found.');
+      if (amt > (g.currentAmount || 0)) throw new ValidationError('Cannot withdraw more than the goal currently holds.');
+      g.currentAmount = roundMoney((g.currentAmount || 0) - amt);
       goalStore.put(g);
 
       tx.objectStore('savings_contributions').put({
@@ -147,9 +150,16 @@ export async function reverseContribution(transactionId, reason = '') {
       if (!goal) throw new ValidationError('Savings goal not found.');
       // A contribution reversal removes money from the goal; a withdrawal
       // reversal restores it — the inverse of what each action originally did.
-      goal.currentAmount = wasContribution
-        ? Math.max(0, (goal.currentAmount || 0) - original.amount)
-        : (goal.currentAmount || 0) + original.amount;
+      // Reversing a contribution takes money OUT of the goal. If part of it was
+      // already withdrawn there is not enough left, and the old Math.max(0, ..)
+      // clamp silently created money: the account got the full amount back
+      // while the goal could only give up what it still held.
+      if (wasContribution && (goal.currentAmount || 0) < original.amount) {
+        throw new ValidationError('This goal no longer holds that much — reverse the later withdrawal(s) first.');
+      }
+      goal.currentAmount = roundMoney(wasContribution
+        ? (goal.currentAmount || 0) - original.amount
+        : (goal.currentAmount || 0) + original.amount);
       goalStore.put(goal);
 
       tx.objectStore('savings_contributions').put({

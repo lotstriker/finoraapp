@@ -20,9 +20,16 @@
 
 import { getActiveDbName } from '../modules/profiles.js';
 
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 
 let dbPromise = null;
+
+/** Closes the cached connection so the next openDB() reopens (profile switch / tests simulating another device). */
+export async function closeDB() {
+  if (!dbPromise) return;
+  try { (await dbPromise).close(); } catch { /* already closed */ }
+  dbPromise = null;
+}
 
 /**
  * Opens (and lazily creates) the active profile's Finora IndexedDB
@@ -138,18 +145,52 @@ export function openDB() {
       // v5: investments — FD/Mutual Fund/Stocks/Gold/etc. tracking.
       // investedAmount leaves an account as a real ledger transaction;
       // currentValue is a manually-updated estimate with no ledger effect.
+      // sync_meta — DEVICE-LOCAL server-sync bookkeeping: for every synced record, the server revision we last
+      // saw and a hash of what we last pushed/applied. Deliberately NOT in ALL_STORES, so it is never exported
+      // in a backup nor overwritten by a restore (another device's bookkeeping would be wrong here).
+      if (event.oldVersion < 6 && !db.objectStoreNames.contains('sync_meta')) {
+        db.createObjectStore('sync_meta', { keyPath: 'key' });
+      }
+
       if (event.oldVersion < 5 && !db.objectStoreNames.contains('investments')) {
         const store = db.createObjectStore('investments', { keyPath: 'id' });
         store.createIndex('status', 'status');
       }
     };
 
-    request.onsuccess = (event) => resolve(event.target.result);
+    request.onsuccess = (event) => {
+      clearTimeout(blockedTimer);
+      const db = event.target.result;
+      // If another tab upgrades the schema, close this connection instead of
+      // blocking that upgrade (then reopen lazily on the next call).
+      db.onversionchange = () => { db.close(); dbPromise = null; };
+      resolve(db);
+    };
     request.onerror = (event) => reject(event.target.error);
-    request.onblocked = () => reject(new Error('Database upgrade blocked — close other Finora tabs.'));
+    // "blocked" only means another tab still holds the old version; that tab now closes itself
+    // (onversionchange below), so wait a few seconds before giving up instead of failing instantly.
+    let blockedTimer;
+    request.onblocked = () => {
+      blockedTimer = setTimeout(() => reject(new Error('Database upgrade blocked — close other Finora tabs.')), 5000);
+    };
   });
 
   return dbPromise;
+}
+
+/* ---------- change signal (drives automatic cloud backup) ---------- */
+const changeListeners = new Set();
+
+/** Calls `fn(storeNames)` after EVERY committed write transaction (except `quiet` ones). Returns an unsubscribe fn. */
+export function onDataChanged(fn) {
+  changeListeners.add(fn);
+  return () => changeListeners.delete(fn);
+}
+
+function emitDataChanged(storeNames) {
+  for (const fn of changeListeners) {
+    try { fn(storeNames); } catch { /* a listener must never break a save */ }
+  }
 }
 
 /**
@@ -160,14 +201,19 @@ export function openDB() {
  * @param {string[]} storeNames
  * @param {'readonly'|'readwrite'} mode
  * @param {(tx: IDBTransaction) => void|Promise<void>} fn
+ * @param {{quiet?: boolean}} [options] quiet: bookkeeping writes (sync markers, logs) that
+ *        must NOT count as "your data changed" — otherwise backing up would trigger a backup.
  */
-export async function withTransaction(storeNames, mode, fn) {
+export async function withTransaction(storeNames, mode, fn, { quiet = false } = {}) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeNames, mode);
     let result;
 
-    tx.oncomplete = () => resolve(result);
+    tx.oncomplete = () => {
+      if (mode === 'readwrite' && !quiet) emitDataChanged(storeNames);   // only AFTER the commit succeeded
+      resolve(result);
+    };
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
 

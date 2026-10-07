@@ -17,6 +17,7 @@ import { icons } from '../utils/icons.js';
 import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 
+import { todayLocal, dateInputToIso } from '../utils/date.js';
 let container = null;
 
 export async function renderCommitteesPage(root, params) {
@@ -150,8 +151,13 @@ function openCreateModal() {
           </div>
           <div class="field">
             <label for="cm-start">Start date</label>
-            <input class="input" id="cm-start" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+            <input class="input" id="cm-start" type="date" value="${todayLocal()}" />
           </div>
+        </div>
+        <div class="field">
+          <label for="cm-commission">Foreman commission % <span class="text-faint">(optional)</span></label>
+          <input class="input" id="cm-commission" type="number" min="0" max="20" step="0.01" value="0" />
+          <span class="field-hint">Keep 0 for an informal committee. For a registered chit fund, enter the % from your chit agreement — it is deducted from each winning bid before the rest is shared back.</span>
         </div>
         <span class="field-hint" id="cm-base-hint"></span>
       </form>
@@ -179,9 +185,10 @@ function openCreateModal() {
           const numberOfMembers = qs('#cm-members', root).value;
           const userMemberships = qs('#cm-mine', root).value;
           const startDateVal = qs('#cm-start', root).value;
-          const startDate = startDateVal ? new Date(startDateVal).toISOString() : undefined;
+          const startDate = dateInputToIso(startDateVal);
+          const commissionPercent = qs('#cm-commission', root).value;
           try {
-            await createCommittee({ name, totalAmount, numberOfMembers, userMemberships, startDate });
+            await createCommittee({ name, totalAmount, numberOfMembers, userMemberships, startDate, commissionPercent });
             close();
             toast.success('Committee added.');
             refresh();

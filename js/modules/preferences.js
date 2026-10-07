@@ -13,10 +13,13 @@ export async function getSetting(key, fallback = null) {
   });
 }
 
+// Bookkeeping keys: changing them is NOT a change to the user's data, so it must not trigger an auto-backup.
+const QUIET_SETTING_KEYS = new Set(['lastBackupAt', 'notifiedLog', 'cloudSync', 'cloudDirty', 'cloudStartFresh', 'e2eKey', 'serverSyncEnabled', 'autoSync', 'datasetId', 'deviceId']);
+
 export async function setSetting(key, value) {
   return withTransaction(['settings'], 'readwrite', (tx) => {
     tx.objectStore('settings').put({ key, value });
-  });
+  }, { quiet: QUIET_SETTING_KEYS.has(key) });
 }
 
 /** All optional modules default to OFF until the user turns one on from Settings. */

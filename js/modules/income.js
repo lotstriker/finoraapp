@@ -17,7 +17,7 @@ import { getCategories } from './categories.js';
  * @param {string} [input.date]
  * @param {object} [input.attachment]
  */
-export async function createIncome(input) {
+export async function createIncome(input, opts = {}) {
   if (!input.category) throw new ValidationError('Income category is required.');
   const valid = await getCategories('income');
   if (!valid.some((c) => c.name === input.category)) {
@@ -35,7 +35,7 @@ export async function createIncome(input) {
     tags: input.tags || [],
     attachment: input.attachment,
     date: input.date,
-  });
+  }, opts);
 }
 
 /** All income entries, newest first. */

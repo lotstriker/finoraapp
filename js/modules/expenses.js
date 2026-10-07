@@ -25,7 +25,7 @@ import { getCategories } from './categories.js';
  * @param {string} [input.date]
  * @param {object} [input.attachment]
  */
-export async function createExpense(input) {
+export async function createExpense(input, opts = {}) {
   if (!input.category) throw new ValidationError('Expense category is required.');
   const valid = await getCategories('expense');
   if (!valid.some((c) => c.name === input.category)) {
@@ -42,7 +42,7 @@ export async function createExpense(input) {
     tags: input.tags || [],
     attachment: input.attachment,
     date: input.date,
-  });
+  }, opts);
 }
 
 /** All expense entries, newest first. */

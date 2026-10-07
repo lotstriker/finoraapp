@@ -18,8 +18,9 @@ import { withTransaction, reqToPromise, getById as dbGetById } from './db.js';
 import { nextTransactionId } from './ids.js';
 import { roundMoney } from '../utils/currency.js';
 
-export class ValidationError extends Error {}
-export class CreditLimitExceededError extends Error {}
+// `name` is set so err.name works (and survives minification) — handy for UI code and tests.
+export class ValidationError extends Error { constructor(m) { super(m); this.name = 'ValidationError'; } }
+export class CreditLimitExceededError extends Error { constructor(m) { super(m); this.name = 'CreditLimitExceededError'; } }
 
 const LEDGER_STORES = ['ledger', 'accounts', 'settings', 'people'];
 
@@ -46,7 +47,10 @@ function applyEffect(account, effect, amount) {
       }
       account.usedAmount = newUsed;
     } else {
-      account.usedAmount = roundMoney(Math.max(0, used - amount));
+      // A payment/refund larger than what is owed becomes a CREDIT balance on
+      // the card (usedAmount < 0) instead of being silently clamped to 0 —
+      // clamping made the extra money vanish from the books.
+      account.usedAmount = roundMoney(used - amount);
     }
     account.balance = -account.usedAmount;
     return;
@@ -56,6 +60,21 @@ function applyEffect(account, effect, amount) {
     account.balance = roundMoney((account.balance || 0) - amount);
   } else {
     account.balance = roundMoney((account.balance || 0) + amount);
+  }
+}
+
+/**
+ * Refuses a second reversal of the same transaction. Runs INSIDE the open
+ * IDB transaction, so two concurrent reverse clicks can never both pass
+ * (IDB serialises overlapping readwrite transactions).
+ */
+async function assertNotAlreadyReversed(tx, parentId) {
+  if (!parentId) return;
+  const existing = await reqToPromise(
+    tx.objectStore('ledger').index('parentTransactionId').getAll(parentId)
+  );
+  if (existing.length > 0) {
+    throw new ValidationError('This transaction has already been reversed.');
   }
 }
 
@@ -70,6 +89,7 @@ async function persistAtomic(record, { extraStores = [], sideEffect, precreate }
   return withTransaction([...LEDGER_STORES, ...extraStores], 'readwrite', async (tx) => {
     if (precreate) await precreate(tx);
     const accountsStore = tx.objectStore('accounts');
+    await assertNotAlreadyReversed(tx, record.parentTransactionId);
     record.id = await nextTransactionId(tx);
     record.createdAt = record.createdAt || new Date().toISOString();
     record.updatedAt = record.createdAt;
@@ -162,6 +182,8 @@ export async function postLinkedTransaction(tx, input) {
   };
   record.updatedAt = record.createdAt;
 
+  await assertNotAlreadyReversed(tx, record.parentTransactionId);
+
   const accountsStore = tx.objectStore('accounts');
   if (record.direction === 'transfer') {
     const [source, dest] = await Promise.all([
@@ -170,6 +192,9 @@ export async function postLinkedTransaction(tx, input) {
     ]);
     if (!source || source.archived) throw new ValidationError('Source account not found or archived.');
     if (!dest || dest.archived) throw new ValidationError('Destination account not found or archived.');
+    if ((source.balance || 0) - record.amount < 0 && source.type !== 'credit_card') {
+      record.status = 'insufficient_balance';
+    }
     applyEffect(source, 'out', record.amount);
     applyEffect(dest, 'in', record.amount);
     accountsStore.put(source);
@@ -177,6 +202,10 @@ export async function postLinkedTransaction(tx, input) {
   } else {
     const account = await reqToPromise(accountsStore.get(record.accountId));
     if (!account || account.archived) throw new ValidationError('Account not found or archived.');
+    if (record.direction === 'out' && account.type !== 'credit_card' &&
+        (account.balance || 0) - record.amount < 0) {
+      record.status = 'insufficient_balance';
+    }
     applyEffect(account, record.direction, record.amount);
     accountsStore.put(account);
   }
@@ -286,7 +315,13 @@ export async function createTransaction(input, opts = {}) {
     parentTransactionId: input.parentTransactionId || null,
   };
 
-  return persistAtomic(record, opts);
+  const saved = await persistAtomic(record, opts);
+  // Posting succeeded, but the account went below zero: tell the UI (app.js shows a toast)
+  // so the user hears about it NOW instead of finding a small badge later.
+  if (saved.status === 'insufficient_balance' && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('finora:insufficient-balance', { detail: { id: saved.id, accountId: saved.accountId, amount: saved.amount } }));
+  }
+  return saved;
 }
 
 /**
@@ -379,8 +414,26 @@ export async function getLedgerForPerson(personId) {
 
 /** Most recent N ledger entries across all accounts, newest first. */
 export async function getRecentTransactions(limit = 5) {
-  return withTransaction(['ledger'], 'readonly', async (tx) => {
-    const all = await reqToPromise(tx.objectStore('ledger').getAll());
-    return all.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, limit);
-  });
+  // Walk the `date` index BACKWARDS and stop after `limit` rows — O(limit), not O(whole ledger).
+  return withTransaction(['ledger'], 'readonly', (tx) => new Promise((resolve, reject) => {
+    const out = [];
+    const req = tx.objectStore('ledger').index('date').openCursor(null, 'prev');
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor || out.length >= limit) { resolve(out); return; }
+      out.push(cursor.value);
+      cursor.continue();
+    };
+  }));
+}
+
+/**
+ * Ledger rows with from <= date < to (ISO strings), via the `date` index.
+ * Lets monthly screens read ONE month instead of loading years of history.
+ */
+export async function getLedgerBetween(fromIso, toIso) {
+  return withTransaction(['ledger'], 'readonly', (tx) =>
+    reqToPromise(tx.objectStore('ledger').index('date').getAll(IDBKeyRange.bound(fromIso, toIso, false, true)))
+  );
 }

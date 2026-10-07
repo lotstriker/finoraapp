@@ -80,19 +80,27 @@ export async function recordScheduled(id, { useScheduledDate = false } = {}) {
   if (item.status !== 'pending') throw new ValidationError('This has already been recorded or skipped.');
 
   const date = useScheduledDate ? item.scheduledDate : new Date().toISOString();
-  let posted;
-  if (item.type === 'income') {
-    posted = await createIncome({ accountId: item.accountId, amount: item.amount, category: item.category, description: item.description, date });
-  } else if (item.type === 'expense') {
-    posted = await createExpense({ accountId: item.accountId, amount: item.amount, category: item.category, description: item.description, date });
-  } else {
-    posted = await createTransfer({ fromAccountId: item.accountId, toAccountId: item.toAccountId, amount: item.amount, description: item.description, date });
-  }
 
-  await withTransaction(['scheduled_transactions'], 'readwrite', async (tx) => {
-    await reqToPromise(tx.objectStore('scheduled_transactions').put({ ...item, status: 'completed', completedTransactionId: posted.id }));
-  });
-  return posted;
+  // Posting the ledger entry AND marking the plan completed happen in ONE
+  // atomic transaction, with the "still pending?" check repeated inside it —
+  // so a double-click or a crash can't post twice / leave it pending.
+  const opts = {
+    extraStores: ['scheduled_transactions'],
+    sideEffect: async (tx, record) => {
+      const store = tx.objectStore('scheduled_transactions');
+      const fresh = await reqToPromise(store.get(id));
+      if (!fresh || fresh.status !== 'pending') throw new ValidationError('This has already been recorded or skipped.');
+      store.put({ ...fresh, status: 'completed', completedTransactionId: record.id });
+    },
+  };
+
+  if (item.type === 'income') {
+    return createIncome({ accountId: item.accountId, amount: item.amount, category: item.category, description: item.description, date }, opts);
+  }
+  if (item.type === 'expense') {
+    return createExpense({ accountId: item.accountId, amount: item.amount, category: item.category, description: item.description, date }, opts);
+  }
+  return createTransfer({ fromAccountId: item.accountId, toAccountId: item.toAccountId, amount: item.amount, description: item.description, date }, opts);
 }
 
 export async function skipScheduled(id) {

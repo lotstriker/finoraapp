@@ -12,7 +12,7 @@ import { withTransaction, reqToPromise, getAll, getById } from '../core/db.js';
 import { createTransaction, getLedgerForPerson, ValidationError } from '../core/ledger.js';
 import { newId } from '../core/ids.js';
 
-export class DuplicateNameError extends Error {}
+export class DuplicateNameError extends Error { constructor(m) { super(m); this.name = 'DuplicateNameError'; } }
 
 export async function getPeople({ includeArchived = false } = {}) {
   const all = await getAll('people');

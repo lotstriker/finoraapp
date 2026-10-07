@@ -18,7 +18,10 @@ import { icons } from '../utils/icons.js';
 import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 import { isGoogleConfigured, isConnected as isGoogleConnected, getConnectedEmail, connectGoogleAccount, disconnectGoogleAccount, getAccessToken, trySilentReconnect } from '../modules/google-auth.js';
-import { backupToGoogleDrive, getGoogleDriveBackupInfo, restoreFromGoogleDrive } from '../modules/google-drive-backup.js';
+import { backupToGoogleDrive, getGoogleDriveBackupInfo } from '../modules/google-drive-backup.js';
+import { isAutoSyncEnabled, setAutoSyncEnabled, requestSync, refreshCloudSync, markSynced, getSyncStatus, onSyncStatus } from '../modules/cloud-sync.js';
+import { renderServerSyncCard } from './server-sync-ui.js';
+import { openCloudConflictModal, openGoogleRestoreModal, statusText } from './cloud-sync-ui.js';
 
 const DEFAULT_ACCOUNT_KEY = 'defaultAccountId';
 const MODULE_LABELS = { income: 'Income', expenses: 'Expenses', budgets: 'Budgets', scheduled: 'Scheduled', people: 'People', billsplits: 'Bill Splits', loans: 'Loans & EMI', bidsave: 'Bid & Save', savings: 'Savings', investments: 'Investments', recurring: 'Recurring' };
@@ -95,7 +98,7 @@ export async function renderSettingsPage(root) {
           <label for="st-default-account">Default account (pre-selected in forms)</label>
           <select class="select" id="st-default-account" style="max-width:280px;">
             <option value="">No default</option>
-            ${accounts.map((a) => `<option value="${a.id}" ${a.id === defaultAccountId ? 'selected' : ''}>${a.name}</option>`).join('')}
+            ${accounts.map((a) => `<option value="${a.id}" ${a.id === defaultAccountId ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -148,6 +151,12 @@ export async function renderSettingsPage(root) {
         <div id="st-google-backup-content">Loading…</div>
       </div>
 
+      <div class="card mb-4" id="st-server-sync-card">
+        <h3 class="mb-1">Server sync <span class="badge badge-neutral">beta</span></h3>
+        <p class="text-sm text-muted mb-3">Live, end-to-end-encrypted sync between your devices through your own Supabase project.</p>
+        <div id="st-server-sync-content">Loading…</div>
+      </div>
+
       <div class="card mb-4">
         <h3 class="mb-1">Export</h3>
         <p class="text-sm text-muted mb-3">Plain CSV files for spreadsheets — not encrypted, not a substitute for backup.</p>
@@ -155,6 +164,10 @@ export async function renderSettingsPage(root) {
           <button class="btn btn-secondary btn-sm" id="btn-export-txn">All Transactions</button>
           <button class="btn btn-secondary btn-sm" id="btn-export-income">Income Only</button>
           <button class="btn btn-secondary btn-sm" id="btn-export-expenses">Expenses Only</button>
+          <button class="btn btn-secondary btn-sm" id="btn-export-accounts">Accounts</button>
+          <button class="btn btn-secondary btn-sm" id="btn-export-loans">Loan Schedules</button>
+          <button class="btn btn-secondary btn-sm" id="btn-export-people">People</button>
+          <button class="btn btn-secondary btn-sm" id="btn-export-goals">Savings Goals</button>
         </div>
       </div>
 
@@ -224,6 +237,9 @@ export async function renderSettingsPage(root) {
   qs('#btn-export-txn', root).addEventListener('click', () => exportCsv('transactions').then(() => toast.success('Exported.')));
   qs('#btn-export-income', root).addEventListener('click', () => exportCsv('income').then(() => toast.success('Exported.')));
   qs('#btn-export-expenses', root).addEventListener('click', () => exportCsv('expenses').then(() => toast.success('Exported.')));
+  for (const kind of ['accounts', 'loans', 'people', 'goals']) {
+    qs(`#btn-export-${kind}`, root).addEventListener('click', () => exportCsv(kind).then(() => toast.success('Exported.')));
+  }
   qs('#btn-delete-all', root).addEventListener('click', openDeleteAllModal);
 
   qs('#btn-add-profile', root)?.addEventListener('click', () => openAddProfileModal(root));
@@ -269,7 +285,10 @@ export async function renderSettingsPage(root) {
   await renderCategories(root);
   await renderBackupReminder();
   await renderGoogleBackupCard(root);
+  renderServerSyncCard(document.querySelector('#st-server-sync-content')).catch(() => {});
 }
+
+let settingsSyncUnsub = null;
 
 async function renderGoogleBackupCard(root) {
   const contentEl = document.querySelector('#st-google-backup-content');
@@ -286,6 +305,8 @@ async function renderGoogleBackupCard(root) {
       try {
         const email = await connectGoogleAccount();
         toast.success(`Connected as ${email}.`);
+        await refreshCloudSync();
+        requestSync('connected');
         await renderGoogleBackupCard(root);
       } catch (err) {
         toast.error(err.message || 'Could not connect to Google.');
@@ -304,8 +325,10 @@ async function renderGoogleBackupCard(root) {
       `;
       document.querySelector('#btn-google-connect')?.addEventListener('click', async () => {
         try {
-          const email = await connectGoogleAccount();
+          const email = await connectGoogleAccount({ prompt: '' });
           toast.success(`Connected as ${email}.`);
+          await refreshCloudSync();
+          requestSync('reconnected');
           await renderGoogleBackupCard(root);
         } catch (err) {
           toast.error(err.message || 'Could not connect to Google.');
@@ -320,7 +343,11 @@ async function renderGoogleBackupCard(root) {
   contentEl.innerHTML = `
     <p class="text-sm mb-2">Connected as <strong>${escapeHtml(getConnectedEmail() || '')}</strong></p>
     <p class="text-sm text-muted mb-3" id="st-google-last-backup">${lastBackupText}</p>
+    <label class="sync-toggle mb-1"><input type="checkbox" id="st-auto-sync" /> <span>Automatic sync on this device</span></label>
+    <p class="text-xs text-faint mb-2">Saves changes to Google Drive a few seconds after you make them, and checks Drive when you open Finora or come back to it. It needs internet; after about an hour Google may ask you to tap <em>Reconnect</em> (a Google rule for web apps). If two devices change the same data you are asked before anything is overwritten.</p>
+    <p class="text-sm mb-3" id="st-sync-status" aria-live="polite"></p>
     <div class="flex-row-wrap mb-2">
+      <button class="btn btn-secondary btn-sm" id="btn-sync-now">Sync now</button>
       <button class="btn btn-primary btn-sm" id="btn-google-backup-now">Backup Now</button>
       <button class="btn btn-secondary btn-sm" id="btn-google-restore">Restore</button>
       <button class="btn btn-ghost btn-sm" id="btn-google-disconnect" style="color:var(--color-danger);">Disconnect</button>
@@ -331,69 +358,61 @@ async function renderGoogleBackupCard(root) {
     .then((info) => {
       const el = document.querySelector('#st-google-last-backup');
       if (!el) return;
-      el.textContent = info ? `Last backup: ${formatDate(info.modifiedTime)}` : 'No backup yet.';
+      if (info.mine) el.textContent = `Last backup: ${formatDate(info.mine.modifiedTime)}`;
+      else if (info.total > 0) el.textContent = `No backup for this profile yet. ${info.total} other backup${info.total === 1 ? '' : 's'} found in this Google account — use Restore to load one.`;
+      else el.textContent = 'No backup yet.';
     })
     .catch(() => {
       const el = document.querySelector('#st-google-last-backup');
       if (el) el.textContent = 'Could not check for an existing backup.';
     });
 
+  // ---- automatic sync switch + live status ----
+  const autoBox = document.querySelector('#st-auto-sync');
+  isAutoSyncEnabled().then((on) => { if (autoBox) autoBox.checked = on; });
+  autoBox?.addEventListener('change', async () => {
+    await setAutoSyncEnabled(autoBox.checked);
+    if (autoBox.checked) requestSync('enabled', { interactive: true });
+    toast.success(autoBox.checked ? 'Automatic sync is on.' : 'Automatic sync is off.');
+  });
+  const paintStatus = (s) => { const el = document.querySelector('#st-sync-status'); if (el) el.textContent = statusText(s); };
+  paintStatus(getSyncStatus());
+  settingsSyncUnsub?.();
+  settingsSyncUnsub = onSyncStatus(paintStatus);
+  document.querySelector('#btn-sync-now')?.addEventListener('click', async () => {
+    const st = await requestSync('manual', { interactive: true });
+    if (st.state === 'conflict') openCloudConflictModal({ message: st.message, remoteModifiedTime: st.remote?.modifiedTime });
+    else if (st.state === 'idle') { toast.success('Everything is up to date.'); await renderGoogleBackupCard(root); }
+  });
+
   document.querySelector('#btn-google-backup-now')?.addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
     try {
       await backupToGoogleDrive();
+      await markSynced();
       toast.success('Backed up to Google Drive.');
+      await requestSync('manual-backup');
       await renderGoogleBackupCard(root);
     } catch (err) {
+      btn.disabled = false;
+      if (err.name === 'CloudConflictError') { openCloudConflictModal(err, () => renderGoogleBackupCard(root)); return; }
       toast.error(err.message || 'Backup failed.');
-      e.target.disabled = false;
     }
   });
 
-  document.querySelector('#btn-google-restore')?.addEventListener('click', () => openGoogleRestoreModal(root));
+  document.querySelector('#btn-google-restore')?.addEventListener('click', () => openGoogleRestoreModal());
 
   document.querySelector('#btn-google-disconnect')?.addEventListener('click', async () => {
     const ok = await confirmDialog({ title: 'Disconnect Google Account?', message: 'You can reconnect anytime. Your Drive backup stays where it is.' });
     if (!ok) return;
     disconnectGoogleAccount();
+    await refreshCloudSync();
     toast.success('Disconnected.');
     await renderGoogleBackupCard(root);
   });
 }
 
-function openGoogleRestoreModal(settingsRoot) {
-  openModal({
-    title: 'Restore from Google Drive',
-    bodyHtml: `
-      <p class="text-sm mb-3">This downloads your Google Drive backup for this profile and merges it into what's here. Your current local data is <strong>not deleted first</strong> — nothing is overwritten silently.</p>
-      <div class="field mb-0">
-        <label for="gr-mode">Mode</label>
-        <select class="select" id="gr-mode">
-          <option value="merge">Merge — keep existing data, add anything new</option>
-          <option value="replace">Replace — clear this profile's data, then restore</option>
-        </select>
-      </div>
-    `,
-    actions: [
-      { label: 'Cancel', variant: 'btn-secondary', onClick: (close) => close() },
-      { label: 'Restore', variant: 'btn-danger', onClick: async (close, modalRoot) => {
-          const mode = qs('#gr-mode', modalRoot).value;
-          if (mode === 'replace') {
-            const ok = await confirmDialog({ title: 'Replace all data?', message: 'This clears everything in this profile before restoring from Google Drive. This cannot be undone.', danger: true, confirmLabel: 'Replace Everything' });
-            if (!ok) return;
-          }
-          try {
-            await restoreFromGoogleDrive(mode);
-            close();
-            toast.success('Restored from Google Drive. Reloading…');
-            setTimeout(() => location.reload(), 1200);
-          } catch (err) {
-            toast.error(err.message || 'Could not restore this backup.');
-          }
-        } },
-    ],
-  });
-}
 
 async function renderBackupReminder() {
   const status = await getBackupReminderStatus();
@@ -416,7 +435,7 @@ async function renderCategories(root) {
   const row = (c) => `
     <div class="list-row">
       <div class="row-main">
-        <div class="row-title">${c.name} ${c.archived ? '<span class="badge badge-neutral">Archived</span>' : ''}</div>
+        <div class="row-title">${escapeHtml(c.name)} ${c.archived ? '<span class="badge badge-neutral">Archived</span>' : ''}</div>
       </div>
       <button class="btn btn-secondary btn-sm" data-cat-toggle="${c.id}" data-archived="${c.archived}">${c.archived ? 'Restore' : 'Archive'}</button>
     </div>
@@ -555,9 +574,10 @@ function openBulkImportModal() {
       { label: 'Import Valid Rows', variant: 'btn-primary', onClick: async (close, modalRoot) => {
           const validated = modalRoot._biValidated;
           if (!validated) return;
-          const result = await importValidRows(validated);
+          const withDupes = !!qs('#bi-dupes', modalRoot)?.checked;
+          const result = await importValidRows(validated, { includeDuplicates: withDupes });
           close();
-          toast.success(`Imported ${result.imported} transaction${result.imported === 1 ? '' : 's'}.${result.failed ? ` ${result.failed} failed unexpectedly.` : ''}`);
+          toast.success(`Imported ${result.imported} transaction${result.imported === 1 ? '' : 's'}.${result.skipped ? ` Skipped ${result.skipped} possible duplicate${result.skipped === 1 ? '' : 's'}.` : ''}${result.failed ? ` ${result.failed} failed unexpectedly.` : ''}`);
         } },
     ],
     onMount: (root) => {
@@ -574,17 +594,19 @@ function openBulkImportModal() {
         root._biValidated = validated;
         const validCount = validated.filter((v) => v.valid).length;
         const errorCount = validated.length - validCount;
+        const dupCount = validated.filter((v) => v.valid && v.duplicate).length;
 
         qs('#bi-preview', root).innerHTML = `
           <p class="text-sm mt-3 mb-2"><strong>${validCount}</strong> row${validCount === 1 ? '' : 's'} ready to import${errorCount ? `, <strong style="color:var(--color-danger);">${errorCount}</strong> with errors` : ''}.</p>
+          ${dupCount ? `<label class="text-sm mb-2" style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="bi-dupes" /> ${dupCount} look like duplicates of existing entries — import them anyway</label>` : ''}
           <div class="list" style="max-height:260px; overflow-y:auto;">
             ${validated.map((v) => `
               <div class="list-row">
                 <div class="row-main">
                   <div class="row-title">${v.valid ? `${escapeHtml(v.raw.description || v.category)}` : `Row ${v.rowNum}`}</div>
-                  <div class="row-sub" style="${v.valid ? '' : 'color:var(--color-danger);'}">${v.valid ? `${v.type} · ${v.category} · ${v.raw.account}` : v.error}</div>
+                  <div class="row-sub" style="${v.valid ? '' : 'color:var(--color-danger);'}">${v.valid ? `${escapeHtml(v.type)} · ${escapeHtml(v.category)} · ${escapeHtml(v.raw.account)}` : escapeHtml(v.error)}</div>
                 </div>
-                ${v.valid ? `<span class="amount num">${formatCurrency(v.amount)}</span>` : `<span class="badge badge-danger">Error</span>`}
+                ${v.valid ? `${v.duplicate ? '<span class="badge badge-warning">Duplicate?</span>' : ''}<span class="amount num">${formatCurrency(v.amount)}</span>` : `<span class="badge badge-danger">Error</span>`}
               </div>
             `).join('')}
           </div>

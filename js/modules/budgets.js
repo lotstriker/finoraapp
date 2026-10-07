@@ -10,6 +10,7 @@
 import { getAll, getById, withTransaction, reqToPromise } from '../core/db.js';
 import { ValidationError } from '../core/ledger.js';
 import { roundMoney } from '../utils/currency.js';
+import { signedExpense, isExpenseRelated } from '../utils/ledger-math.js';
 
 function newId() {
   return `bud_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -68,14 +69,15 @@ export async function getBudgetProgress() {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
+  // Reversal/refund-aware: reversed or refunded spending frees up budget again.
   const monthExpenses = allTxns.filter((t) => {
-    if (t.type !== 'expense') return false;
+    if (!isExpenseRelated(t)) return false;
     const d = new Date(t.date);
     return d >= monthStart && d < monthEnd;
   });
 
   return budgets.map((b) => {
-    const spent = roundMoney(monthExpenses.filter((t) => t.category === b.category).reduce((s, t) => s + t.amount, 0));
+    const spent = roundMoney(monthExpenses.filter((t) => t.category === b.category).reduce((s, t) => s + signedExpense(t), 0));
     const remaining = roundMoney(b.monthlyLimit - spent);
     const percentUsed = b.monthlyLimit > 0 ? Math.round((spent / b.monthlyLimit) * 100) : 0;
     return { ...b, spent, remaining, percentUsed, overLimit: spent > b.monthlyLimit };

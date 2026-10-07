@@ -15,6 +15,7 @@ import { getDebtPayoffPlan } from '../modules/debt-planner.js';
 import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 
+import { todayLocal, dateInputToIso } from '../utils/date.js';
 let container = null;
 let installmentPage = 1;
 const INSTALLMENT_PAGE_SIZE = 12;
@@ -118,6 +119,9 @@ async function renderPlan(strategy, extraMonthly) {
         </div>
       </div>
 
+      ${plan.baselineStuck ? `<p class="text-sm mb-3" style="color:var(--color-warning);">At least one loan's minimum payment doesn't even cover its monthly interest, so on minimums alone it would never be paid off. Adding an extra payment fixes that.</p>` : ''}
+      ${plan.planCompletes === false ? `<p class="text-sm mb-3" style="color:var(--color-danger);">Even with this plan the loans are not paid off within 100 years — increase the extra monthly payment.</p>` : ''}
+
       <p class="section-title">Pay off in this order</p>
       <div class="list">
         ${plan.order.map((l, i) => `
@@ -181,7 +185,7 @@ function openCreateLoanModal() {
         <span class="field-hint" id="ln-emi-hint"></span>
         <div class="field mt-3">
           <label for="ln-start">Start date</label>
-          <input class="input" id="ln-start" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+          <input class="input" id="ln-start" type="date" value="${todayLocal()}" />
         </div>
         <div class="field" id="ln-disburse-field">
           <label for="ln-disburse">Add principal to an account? (optional)</label>
@@ -227,7 +231,7 @@ function openCreateLoanModal() {
           const tenureMonths = qs('#ln-tenure', root).value;
           const emiAmount = qs('#ln-emi', root).value;
           const startDateVal = qs('#ln-start', root).value;
-          const startDate = startDateVal ? new Date(startDateVal).toISOString() : undefined;
+          const startDate = dateInputToIso(startDateVal);
           const disburseToAccountId = qs('#ln-disburse', root).value || undefined;
 
           try {
@@ -341,7 +345,7 @@ async function openPayModal(loan, installment) {
       </div>
       <div class="field">
         <label for="pay-date">Payment date</label>
-        <input class="input" id="pay-date" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+        <input class="input" id="pay-date" type="date" value="${todayLocal()}" />
       </div>
     `,
     actions: [
@@ -352,7 +356,7 @@ async function openPayModal(loan, installment) {
         onClick: async (close, root) => {
           const accountId = qs('#pay-account', root).value;
           const dateVal = qs('#pay-date', root).value;
-          const date = dateVal ? new Date(dateVal).toISOString() : undefined;
+          const date = dateInputToIso(dateVal);
           try {
             await payInstallment(loan.id, installment.id, { accountId, date });
             close();

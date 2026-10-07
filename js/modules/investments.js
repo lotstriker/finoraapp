@@ -62,14 +62,18 @@ export async function createInvestment(input) {
     createdAt: new Date().toISOString(),
   };
 
-  const txn = await createTransaction({
+  // Money leaving the account AND the investment record are written in ONE
+  // atomic transaction (previously two: a crash in between left a ledger
+  // entry with no investment record behind it).
+  await createTransaction({
     type: 'investment', direction: 'out', accountId: input.accountId, amount: record.investedAmount,
     module: 'investments', moduleRef: record.id, description: `Invested in ${input.name}`, date: record.investedDate,
-  });
-  record.investTransactionId = txn.id;
-
-  await withTransaction(['investments'], 'readwrite', async (tx) => {
-    await reqToPromise(tx.objectStore('investments').put(record));
+  }, {
+    extraStores: ['investments'],
+    sideEffect: async (tx, ledgerRecord) => {
+      record.investTransactionId = ledgerRecord.id;
+      tx.objectStore('investments').put(record);
+    },
   });
   return record;
 }
@@ -96,14 +100,24 @@ export async function redeemInvestment(id, { accountId, redeemAmount, date }) {
   if (!(Number(redeemAmount) > 0)) throw new ValidationError('Redeem amount must be greater than ₹0.');
   if (!accountId) throw new ValidationError('Choose which account receives the money.');
 
-  const txn = await createTransaction({
+  let updated;
+  await createTransaction({
     type: 'investment_redemption', direction: 'in', accountId, amount: roundMoney(Number(redeemAmount)),
     module: 'investments', moduleRef: inv.id, description: `Redeemed ${inv.name}`, date,
-  });
-
-  const updated = { ...inv, status: 'redeemed', currentValue: roundMoney(Number(redeemAmount)), redeemTransactionId: txn.id, redeemedDate: date || new Date().toISOString() };
-  await withTransaction(['investments'], 'readwrite', async (tx) => {
-    await reqToPromise(tx.objectStore('investments').put(updated));
+  }, {
+    extraStores: ['investments'],
+    sideEffect: async (tx, ledgerRecord) => {
+      const store = tx.objectStore('investments');
+      const fresh = await reqToPromise(store.get(id));
+      // Re-checked inside the atomic transaction: a double-click used to
+      // redeem (and credit the account) twice.
+      if (!fresh || fresh.status !== 'active') throw new ValidationError('This investment has already been redeemed.');
+      updated = {
+        ...fresh, status: 'redeemed', currentValue: roundMoney(Number(redeemAmount)),
+        redeemTransactionId: ledgerRecord.id, redeemedDate: date || new Date().toISOString(),
+      };
+      store.put(updated);
+    },
   });
   return updated;
 }

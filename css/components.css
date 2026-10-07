@@ -21,7 +21,7 @@
 
 .btn-primary {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary, #fff);
 }
 .btn-primary:hover:not(:disabled) { background: var(--color-primary-hover); }
 
@@ -321,7 +321,7 @@
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .page-btn:hover:not(:disabled):not(.active) { background: var(--color-bg); color: var(--color-text); }
-.page-btn.active { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.page-btn.active { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary, #fff); }
 .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .page-ellipsis { color: var(--color-text-faint); padding: 0 2px; font-size: var(--fs-sm); }
 
@@ -350,3 +350,17 @@
   border: 1px solid rgba(0,0,0,0.08);
 }
 .swatch-btn span:last-child { font-size: var(--fs-xs); color: var(--color-text-muted); }
+
+
+/* Inline error inside dialogs */
+.modal-error {
+  margin: 0 var(--sp-6) var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: var(--text-sm, 14px);
+  font-weight: 500;
+  border: 1px solid var(--color-danger);
+}
+.modal-error[hidden] { display: none; }

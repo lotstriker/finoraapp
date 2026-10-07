@@ -21,9 +21,9 @@ export function computeNextDate(fromDateIso, rule) {
   switch (rule.frequency) {
     case 'daily': { const d = new Date(fromDateIso); d.setDate(d.getDate() + 1); return d.toISOString(); }
     case 'weekly': { const d = new Date(fromDateIso); d.setDate(d.getDate() + 7); return d.toISOString(); }
-    case 'yearly': return addMonthsClamped(fromDateIso, 12).toISOString();
+    case 'yearly': return addMonthsClamped(fromDateIso, 12, rule.anchorDay).toISOString();
     case 'monthly':
-    default: return addMonthsClamped(fromDateIso, 1).toISOString();
+    default: return addMonthsClamped(fromDateIso, 1, rule.anchorDay).toISOString();
   }
 }
 
@@ -37,9 +37,9 @@ export function computePreviousDate(fromDateIso, rule) {
   switch (rule.frequency) {
     case 'daily': { const d = new Date(fromDateIso); d.setDate(d.getDate() - 1); return d.toISOString(); }
     case 'weekly': { const d = new Date(fromDateIso); d.setDate(d.getDate() - 7); return d.toISOString(); }
-    case 'yearly': return addMonthsClamped(fromDateIso, -12).toISOString();
+    case 'yearly': return addMonthsClamped(fromDateIso, -12, rule.anchorDay).toISOString();
     case 'monthly':
-    default: return addMonthsClamped(fromDateIso, -1).toISOString();
+    default: return addMonthsClamped(fromDateIso, -1, rule.anchorDay).toISOString();
   }
 }
 
@@ -100,6 +100,8 @@ export async function createRule(input) {
     frequency: input.frequency || 'monthly',
     intervalDays: input.frequencyMode === 'validity' ? Number(input.intervalDays) : null,
     nextDueDate: input.startDate || new Date().toISOString(),
+    // Day-of-month the user intended (e.g. 31). Month-end clamping never forgets it.
+    anchorDay: new Date(input.startDate || Date.now()).getDate(),
     lastPaidDate: null,
     lastPaidTransactionId: null,
     active: true,
@@ -141,7 +143,10 @@ export async function recordPayment(ruleId, { accountId, amount, date } = {}) {
       const r = await reqToPromise(store.get(ruleId));
       r.lastPaidDate = record.date;
       r.lastPaidTransactionId = record.id;
-      r.nextDueDate = computeNextDate(record.date, r);
+      // Calendar rules ("rent due on the 5th") advance from the DUE date, so paying
+      // late/early never shifts the schedule. Validity rules ("28-day recharge")
+      // really do restart from the day you paid.
+      r.nextDueDate = computeNextDate(r.frequencyMode === 'validity' ? record.date : r.nextDueDate, r);
       store.put(r);
     },
   });

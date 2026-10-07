@@ -14,6 +14,7 @@ import { icons } from '../utils/icons.js';
 import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 
+import { dateInputToIso } from '../utils/date.js';
 let container = null;
 
 export async function renderSavingsPage(root, params) {
@@ -106,7 +107,7 @@ function openCreateModal() {
           const name = qs('#g-name', root).value;
           const targetAmount = qs('#g-target', root).value;
           const dateVal = qs('#g-date', root).value;
-          const targetDate = dateVal ? new Date(dateVal).toISOString() : undefined;
+          const targetDate = dateInputToIso(dateVal);
           const priority = qs('#g-priority', root).value;
           try {
             await createGoal({ name, targetAmount, targetDate, priority });
@@ -157,7 +158,7 @@ async function openGoalDetail(id) {
       ...(goal.archived
         ? [{ label: 'Unarchive', variant: 'btn-secondary', onClick: async (close) => { await unarchiveGoal(id); close(); toast.success('Restored.'); refresh(); } }]
         : [{ label: 'Archive', variant: 'btn-secondary', onClick: async (close) => {
-              const ok = await confirmDialog({ title: 'Archive goal', message: `Hide "${goal.name}"? History is kept.` });
+              const ok = await confirmDialog({ title: 'Archive goal', message: `Hide "${goal.name}"? History is kept.${(goal.currentAmount || 0) > 0 ? ` It still holds ${formatCurrency(goal.currentAmount)} — withdraw it first if you want that money back in an account.` : ''}` });
               if (ok) { await archiveGoal(id); close(); toast.success('Archived.'); refresh(); }
             } }]),
       { label: 'Close', variant: 'btn-ghost', onClick: (close) => close() },

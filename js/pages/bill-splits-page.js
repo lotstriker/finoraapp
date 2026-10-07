@@ -73,7 +73,7 @@ async function openDetailModal(split) {
   const nameFor = (id) => people.find((p) => p.id === id)?.name || 'Unknown';
 
   openModal({
-    title: escapeHtml(split.description),
+    title: split.description,
     bodyHtml: `
       <p class="text-sm text-muted mb-3">${formatDate(split.date)} · Total ${formatCurrency(split.totalAmount)}</p>
       <div class="summary-list">

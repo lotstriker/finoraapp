@@ -12,6 +12,7 @@ import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 import { ValidationError } from '../core/ledger.js';
 
+import { dateInputToIso } from '../utils/date.js';
 let container = null;
 
 export async function renderInvestmentsPage(root) {
@@ -86,7 +87,7 @@ function openDetailModal(inv) {
   const gainPercent = inv.investedAmount > 0 ? Math.round((gain / inv.investedAmount) * 1000) / 10 : 0;
 
   openModal({
-    title: escapeHtml(inv.name),
+    title: inv.name,
     bodyHtml: `
       <p class="text-sm text-muted mb-3">${investmentTypeLabel(inv.type)} · Invested ${formatDate(inv.investedDate)}${inv.maturityDate ? ` · Matures ${formatDate(inv.maturityDate)}` : ''}</p>
       <div class="summary-list">
@@ -108,7 +109,7 @@ function openDetailModal(inv) {
 
 function openUpdateValueModal(inv) {
   openModal({
-    title: `Update Value · ${escapeHtml(inv.name)}`,
+    title: `Update Value · ${inv.name}`,
     bodyHtml: `
       <div class="field mb-0">
         <label for="uv-value">Current value</label>
@@ -135,7 +136,7 @@ function openUpdateValueModal(inv) {
 async function openRedeemModal(inv) {
   const accounts = await getAccounts();
   openModal({
-    title: `Redeem · ${escapeHtml(inv.name)}`,
+    title: `Redeem · ${inv.name}`,
     bodyHtml: `
       <p class="text-sm text-muted mb-3">Marks this investment closed and adds the redeemed amount back to an account.</p>
       <div class="field">
@@ -211,9 +212,9 @@ async function openInvestmentModal() {
           const investedAmount = Number(qs('#iv-amount', root).value);
           const accountId = qs('#iv-account', root).value;
           const dateVal = qs('#iv-date', root).value;
-          const investedDate = dateVal ? new Date(dateVal).toISOString() : undefined;
+          const investedDate = dateInputToIso(dateVal);
           const maturityVal = qs('#iv-maturity', root).value;
-          const maturityDate = maturityVal ? new Date(maturityVal).toISOString() : undefined;
+          const maturityDate = dateInputToIso(maturityVal);
           const notes = qs('#iv-notes', root).value;
           try {
             await createInvestment({ name, type, investedAmount, accountId, investedDate, maturityDate, notes });

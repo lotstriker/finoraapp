@@ -7,14 +7,15 @@ import { createTransfer, getTransferEntries } from '../modules/transfers.js';
 import { getSetting } from '../modules/preferences.js';
 import { ValidationError } from '../core/ledger.js';
 import { formatCurrency } from '../utils/currency.js';
-import { formatDate, escapeHtml, qs } from '../utils/dom.js';
+import { formatDate, escapeHtml, qs, consumeAddParam } from '../utils/dom.js';
 import { icons } from '../utils/icons.js';
 import { openModal } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 
+import { todayLocal, dateInputToIso } from '../utils/date.js';
 let container = null;
 
-export async function renderTransfersPage(root) {
+export async function renderTransfersPage(root, params) {
   container = root;
   root.innerHTML = `
     <div class="page">
@@ -25,8 +26,9 @@ export async function renderTransfersPage(root) {
       <div class="list" id="transfer-list"></div>
     </div>
   `;
-  qs('#btn-add-transfer', root).addEventListener('click', openAddTransferModal);
+  qs('#btn-add-transfer', root).addEventListener('click', () => openAddTransferModal());
   await refresh();
+  if (consumeAddParam(params, 'transfers')) await openAddTransferModal();
 }
 
 async function refresh() {
@@ -84,7 +86,7 @@ export async function openAddTransferModal(preselectFromId, onSuccess) {
         </div>
         <div class="field">
           <label for="tr-date">Date</label>
-          <input class="input" id="tr-date" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+          <input class="input" id="tr-date" type="date" value="${todayLocal()}" />
         </div>
       </form>
     `,
@@ -106,7 +108,7 @@ export async function openAddTransferModal(preselectFromId, onSuccess) {
           const toAccountId = qs('#tr-to', root).value;
           const amount = Number(qs('#tr-amount', root).value);
           const description = qs('#tr-desc', root).value;
-          const date = qs('#tr-date', root).value ? new Date(qs('#tr-date', root).value).toISOString() : undefined;
+          const date = dateInputToIso(qs('#tr-date', root).value);
 
           try {
             await createTransfer({ fromAccountId, toAccountId, amount, description, date });

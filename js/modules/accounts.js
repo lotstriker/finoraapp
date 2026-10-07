@@ -23,7 +23,7 @@ export const ACCOUNT_TYPES = [
   { value: 'other', label: 'Other' },
 ];
 
-export class DuplicateNameError extends Error {}
+export class DuplicateNameError extends Error { constructor(m) { super(m); this.name = 'DuplicateNameError'; } }
 
 /** All accounts, optionally including archived ones. Active-first, then by name. */
 export async function getAccounts({ includeArchived = false } = {}) {

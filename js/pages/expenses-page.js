@@ -8,18 +8,19 @@ import { createExpense, getExpenseEntries } from '../modules/expenses.js';
 import { getSetting } from '../modules/preferences.js';
 import { ValidationError, CreditLimitExceededError } from '../core/ledger.js';
 import { formatCurrency } from '../utils/currency.js';
-import { formatDate, escapeHtml, qs, renderPagination as renderPaginationUI } from '../utils/dom.js';
+import { formatDate, escapeHtml, qs, renderPagination as renderPaginationUI, consumeAddParam } from '../utils/dom.js';
 import { icons } from '../utils/icons.js';
 import { openModal } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 import { readFileAsAttachment } from '../utils/attachment.js';
 
+import { todayLocal, dateInputToIso } from '../utils/date.js';
 let container = null;
 let searchTerm = '';
 let page = 1;
 const PAGE_SIZE = 10;
 
-export async function renderExpensesPage(root) {
+export async function renderExpensesPage(root, params) {
   container = root;
   root.innerHTML = `
     <div class="page">
@@ -46,6 +47,7 @@ export async function renderExpensesPage(root) {
   });
 
   await refresh();
+  if (consumeAddParam(params, 'expenses')) await openAddExpenseModal();
 }
 
 async function refresh() {
@@ -121,7 +123,7 @@ async function openAddExpenseModal() {
         </div>
         <div class="field">
           <label for="exp-date">Date</label>
-          <input class="input" id="exp-date" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+          <input class="input" id="exp-date" type="date" value="${todayLocal()}" />
         </div>
         <div class="field">
           <label for="exp-attachment">Attachment (optional, under 1.5 MB)</label>
@@ -153,7 +155,7 @@ async function openAddExpenseModal() {
           const amount = Number(qs('#exp-amount', root).value);
           let category = qs('#exp-category', root).value;
           const description = qs('#exp-desc', root).value;
-          const date = qs('#exp-date', root).value ? new Date(qs('#exp-date', root).value).toISOString() : undefined;
+          const date = dateInputToIso(qs('#exp-date', root).value);
           const file = qs('#exp-attachment', root).files[0];
 
           try {

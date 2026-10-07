@@ -15,7 +15,7 @@ import { openAddTransferModal } from './transfers-page.js';
 import { createTransfer } from '../modules/transfers.js';
 import { recordRepaymentReceived } from '../modules/people.js';
 import { formatCurrency, formatSignedCurrency } from '../utils/currency.js';
-import { formatDate, escapeHtml, qs, bindRowActivation, renderPagination } from '../utils/dom.js';
+import { formatDate, escapeHtml, qs, bindRowActivation, renderPagination, enhanceTabs } from '../utils/dom.js';
 import { icons, accountTypeIcon } from '../utils/icons.js';
 import { openModal, closeModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
@@ -227,7 +227,7 @@ async function openAccountDetail(id) {
             { label: 'Adjust Balance', variant: 'btn-secondary', onClick: (close) => { close(); openAdjustBalanceModal(account); } },
             { label: 'Transfer', variant: 'btn-secondary', onClick: (close) => { close(); openAddTransferModal(id, refresh); } },
             { label: 'Archive', variant: 'btn-secondary', onClick: async (close) => {
-                const ok = await confirmDialog({ title: 'Archive account', message: `Hide "${account.name}" from your active accounts? Its history is kept.` });
+                const ok = await confirmDialog({ title: 'Archive account', message: `Hide "${account.name}" from your active accounts? Its history is kept.${Math.abs(account.balance || 0) > 0.005 ? ` It still holds ${formatCurrency(account.balance)}, which will no longer count in your Total Balance until you restore it.` : ''}` });
                 if (ok) { await archiveAccount(id); close(); toast.success('Account archived.'); refresh(); }
               } },
             { label: 'Add Money', variant: 'btn-primary', onClick: (close) => { close(); openAddMoneyModal(account); } },
@@ -245,6 +245,7 @@ async function openAccountDetail(id) {
         });
       });
 
+      enhanceTabs(root);
       await renderOverviewTab(root, account, id);
       await renderTransactionsTab(root, id);
       await renderReportsTab(root, id);
@@ -263,8 +264,8 @@ async function renderOverviewTab(root, account, id) {
       ${account.type === 'credit_card' ? `
         <div class="card stat-card">
           <span class="stat-label">Available Limit</span>
-          <span class="amount amount--lg num amount--in">${formatCurrency(account.creditLimit - account.usedAmount)}</span>
-          <span class="text-xs text-faint">of ${formatCurrency(account.creditLimit)} · used ${formatCurrency(account.usedAmount)}</span>
+          <span class="amount amount--lg num amount--in">${formatCurrency(account.creditLimit - Math.max(0, account.usedAmount))}</span>
+          <span class="text-xs text-faint">of ${formatCurrency(account.creditLimit)} · ${account.usedAmount < 0 ? `${formatCurrency(-account.usedAmount)} credit balance (overpaid)` : `used ${formatCurrency(account.usedAmount)}`}</span>
         </div>` : ''}
       <div class="card stat-card">
         <span class="stat-label">Money In</span>

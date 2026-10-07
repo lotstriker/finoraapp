@@ -8,18 +8,19 @@ import { createIncome, getIncomeEntries } from '../modules/income.js';
 import { getSetting } from '../modules/preferences.js';
 import { ValidationError } from '../core/ledger.js';
 import { formatCurrency } from '../utils/currency.js';
-import { formatDate, escapeHtml, qs, qsa, renderPagination as renderPaginationUI } from '../utils/dom.js';
+import { formatDate, escapeHtml, qs, qsa, renderPagination as renderPaginationUI, consumeAddParam } from '../utils/dom.js';
 import { icons } from '../utils/icons.js';
 import { openModal } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 import { readFileAsAttachment } from '../utils/attachment.js';
 
+import { todayLocal, dateInputToIso } from '../utils/date.js';
 let container = null;
 let searchTerm = '';
 let page = 1;
 const PAGE_SIZE = 10;
 
-export async function renderIncomePage(root) {
+export async function renderIncomePage(root, params) {
   container = root;
   root.innerHTML = `
     <div class="page">
@@ -46,6 +47,7 @@ export async function renderIncomePage(root) {
   });
 
   await refresh();
+  if (consumeAddParam(params, 'income')) await openAddIncomeModal();
 }
 
 async function refresh() {
@@ -124,7 +126,7 @@ async function openAddIncomeModal() {
         </div>
         <div class="field">
           <label for="inc-date">Date</label>
-          <input class="input" id="inc-date" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+          <input class="input" id="inc-date" type="date" value="${todayLocal()}" />
         </div>
         <div class="field">
           <label for="inc-attachment">Attachment (optional, under 1.5 MB)</label>
@@ -149,7 +151,7 @@ async function openAddIncomeModal() {
           let category = qs('#inc-category', root).value;
           const source = qs('#inc-source', root).value;
           const description = qs('#inc-desc', root).value;
-          const date = qs('#inc-date', root).value ? new Date(qs('#inc-date', root).value).toISOString() : undefined;
+          const date = dateInputToIso(qs('#inc-date', root).value);
           const file = qs('#inc-attachment', root).files[0];
 
           try {

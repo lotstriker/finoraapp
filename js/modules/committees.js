@@ -86,6 +86,13 @@ export async function createCommittee(input) {
     throw new ValidationError('Your memberships cannot exceed the number of members.');
   }
 
+  // Optional foreman commission (registered chit funds): taken out of the winning bid
+  // ("discount") before the rest is shared as dividend. 0 = informal committee (default).
+  const commissionPercent = Number(input.commissionPercent) || 0;
+  if (commissionPercent < 0 || commissionPercent > 20) {
+    throw new ValidationError('Foreman commission must be between 0% and 20%.');
+  }
+
   const numberOfMembers = Number(input.numberOfMembers);
   const userMemberships = Number(input.userMemberships);
   const totalAmount = Number(input.totalAmount);
@@ -99,6 +106,7 @@ export async function createCommittee(input) {
     numberOfMembers,
     userMemberships,
     baseContribution,
+    commissionPercent,
     duration: numberOfMembers,
     startDate,
     endDate: addMonthsClamped(startDate, numberOfMembers).toISOString(),
@@ -189,7 +197,12 @@ export async function recordCycle(committeeId, cycleId, input) {
     }
   }
 
-  const discountPerMembership = roundMoney(winningBid / committee.numberOfMembers);
+  // Foreman commission comes out of the bid; only the remainder is shared back (dividend).
+  const commission = isSkip ? 0 : roundMoney(committee.totalAmount * (Number(committee.commissionPercent) || 0) / 100);
+  if (!isSkip && winningBid < commission) {
+    throw new ValidationError(`The winning bid must be at least the foreman's commission (${commission}).`);
+  }
+  const discountPerMembership = roundMoney((winningBid - commission) / committee.numberOfMembers);
   const payablePerMembership = roundMoney(committee.baseContribution - discountPerMembership);
   const totalPayable = roundMoney(payablePerMembership * committee.userMemberships);
   const userSaving = roundMoney(discountPerMembership * committee.userMemberships);
@@ -206,6 +219,8 @@ export async function recordCycle(committeeId, cycleId, input) {
   }, {
     extraStores: ['committee_cycles', 'committees'],
     sideEffect: async (tx, record) => {
+      const fresh = await reqToPromise(tx.objectStore('committee_cycles').get(cycleId));
+      if (!fresh || fresh.status === 'recorded') throw new ValidationError('This cycle has already been recorded.');
       let payoutTransactionId = null;
       if (userWon && payout > 0 && input.payoutAccountId) {
         const payoutRecord = await postLinkedTransaction(tx, {

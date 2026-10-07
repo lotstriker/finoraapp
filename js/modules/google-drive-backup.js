@@ -1,250 +1,234 @@
 // ==========================================================================
 // Finora — modules/google-drive-backup.js
 //
-// Google Drive App Data backup for Finora.
+// Google Drive "App Data" backup. Cross-checked against Google's docs:
+//   * Drive API v3 — files.list (spaces=appDataFolder), files.get alt=media, upload guide
+//     (multipart <= 5 MB, resumable above; UPDATE a resumable upload with PATCH — PUT
+//     does not return the session Location), file `version` ("monotonically increasing")
+//   * Custom file properties: max 124 BYTES per property (key + value, UTF-8)
+//   * Drive usage limits: 403 userRateLimitExceeded / rateLimitExceeded and 429 -> back off
+//     and retry; 5xx -> retry; other 403 -> permission problem, do NOT retry
+//   * Identity Services token model (see google-auth.js)
 //
-// IMPORTANT DESIGN:
-// Google Drive's appDataFolder is already private to the connected Google
-// account. Therefore the backup identity must NOT depend on the local
-// Finora profile ID, because local profile IDs can differ between devices.
+// DESIGN
+//   * One cloud file PER DATASET: finora-dataset-{datasetId}.json. The datasetId lives in the
+//     data and travels with backups, so a phone that restores the PC's backup syncs to the SAME
+//     file, while a second profile gets its own file.
+//   * Optimistic concurrency: this device remembers the file's `version` from its last sync. If
+//     the cloud copy moved on since, Backup refuses (CloudConflictError) instead of silently
+//     erasing the other device's data.
+//   * `contentHash` (SHA-256 of the exported data) lets automatic sync skip uploads when
+//     nothing really changed.
+//   * Older files stay readable: "finora-google-backup.json" (v2) and "finora-backup-{id}.json".
 //
-// NEW MULTI-DEVICE DESIGN:
-//   One Google account -> one Finora cloud backup file
-//
-// This means:
-//
-//   PC  -> Google Account A -> finora-google-backup.json
-//   Phone -> Google Account A -> same finora-google-backup.json
-//
-// The backup encryption key is still derived from the Google account's
-// stable ID, so the same Google account can decrypt the backup on another
-// device.
-//
-// LEGACY COMPATIBILITY:
-// Older Finora versions created:
-//   finora-backup-{localProfileId}.json
-//
-// Restore/backup will still look for the old profile-based file if the new
-// account-based file does not exist. When a new backup is made, the new
-// account-based file is used.
-//
+// The encryption key is derived from the Google account id (see README: this protects the file
+// from other Google accounts/apps, not from someone holding your Google login).
 // ==========================================================================
 
 import {
-  exportAllStores,
-  deriveKey,
-  bufToBase64,
-  base64ToBuf,
-  PBKDF2_ITERATIONS,
-  BACKUP_VERSION,
-  restoreBackup,
-  recordBackupCompleted,
+  exportAllStores, deriveKey, bufToBase64, base64ToBuf,
+  PBKDF2_ITERATIONS, LEGACY_PBKDF2_ITERATIONS, BACKUP_VERSION,
+  restoreBackup, recordBackupCompleted,
+  getDatasetId, setDatasetId, getCloudSync, setCloudSync,
 } from './backup.js';
-
-import {
-  getAccessToken,
-  getStableAccountId,
-} from './google-auth.js';
-
+import { ensureAccessToken, invalidateAccessToken, getStableAccountId } from './google-auth.js';
 import { getActiveProfile } from './profiles.js';
 import { DB_VERSION } from '../core/db.js';
 import { ValidationError } from '../core/ledger.js';
 
-// --------------------------------------------------------------------------
-// Security / key derivation
-// --------------------------------------------------------------------------
+const APP_PEPPER = 'finora-gdrive-backup-v1';        // kept for compatibility with existing backups
+const V2_FILE_NAME = 'finora-google-backup.json';     // one-per-account (v2)
+const DATASET_PREFIX = 'finora-dataset-';
+const DRIVE = 'https://www.googleapis.com/drive/v3/files';
+const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
+/** Multipart upload is limited to 5 MB by Google; stay safely below it. */
+export const MULTIPART_LIMIT_BYTES = 4 * 1024 * 1024;
+/** Drive: a custom property may use at most 124 bytes for key + value (UTF-8). */
+export const APP_PROPERTY_MAX_BYTES = 124;
 
-// Fixed, non-secret domain-separation string.
-//
-// This is intentionally kept compatible with the previous implementation so
-// backups created before this file change can still be decrypted using the
-// same Google account.
-const APP_PEPPER = 'finora-gdrive-backup-v1';
+/* ---------------------------------------------------------------------- */
+/* Errors                                                                 */
+/* ---------------------------------------------------------------------- */
 
-// --------------------------------------------------------------------------
-// Backup filenames
-// --------------------------------------------------------------------------
-
-// NEW:
-// App Data is already isolated per Google account, so a fixed filename is
-// enough to identify the Finora backup for that Google account.
-//
-// This is what makes the backup device-independent.
-const CLOUD_BACKUP_FILE_NAME = 'finora-google-backup.json';
-
-// OLD:
-// Previous versions used the local Finora profile ID.
-//
-// We keep this only for backwards compatibility.
-function legacyBackupFileName() {
-  const profile = getActiveProfile();
-
-  if (!profile?.id) {
-    return null;
+/** Thrown when the cloud copy changed since this device last synced. */
+export class CloudConflictError extends Error {
+  constructor({ remoteModifiedTime, reason }) {
+    super(reason === 'unknown-state'
+      ? 'A cloud backup for this data already exists, but this device has not synced with it yet.'
+      : 'The cloud backup was changed by another device since you last synced.');
+    this.name = 'CloudConflictError';
+    this.remoteModifiedTime = remoteModifiedTime;
+    this.reason = reason;
   }
-
-  return `finora-backup-${profile.id}.json`;
 }
 
-// --------------------------------------------------------------------------
-// Google Drive request helper
-// --------------------------------------------------------------------------
+/** Thrown by restore when several backups exist and the caller must say which one. */
+export class CloudChoiceRequired extends Error {
+  constructor(backups) { super('Several backups found — choose one.'); this.name = 'CloudChoiceRequired'; this.backups = backups; }
+}
 
-async function driveFetch(url, options = {}) {
-  const token = getAccessToken();
+/**
+ * A Drive/network failure, classified so callers can decide what to do:
+ *   kind 'auth'     401 — token dead; sign in again
+ *   kind 'scope'    403 (not a rate limit) — permission missing; reconnect and tick the Drive box
+ *   kind 'rate'     403 userRateLimitExceeded/rateLimitExceeded or 429 — retry later with backoff
+ *   kind 'server'   500/502/503/504 — retry later with backoff
+ *   kind 'network'  could not reach Google — retry when online
+ *   kind 'notfound' 404
+ *   kind 'other'    anything else (e.g. 400) — do not retry blindly
+ * `retryable` is true for rate / server / network.
+ */
+export class DriveError extends Error {
+  constructor(message, { kind, status = 0, reason = '' }) {
+    super(message);
+    this.name = 'DriveError';
+    this.kind = kind;
+    this.status = status;
+    this.reason = reason;
+    this.retryable = kind === 'rate' || kind === 'server' || kind === 'network';
+  }
+}
 
-  if (!token) {
-    throw new Error('Not connected to Google — please reconnect.');
+const RATE_REASONS = new Set(['userRateLimitExceeded', 'rateLimitExceeded', 'sharingRateLimitExceeded', 'quotaExceeded']);
+
+async function toDriveError(res) {
+  let reason = '';
+  let detail = '';
+  try {
+    const body = await res.clone().json();
+    detail = body?.error?.message || '';
+    reason = body?.error?.errors?.[0]?.reason || body?.error?.status || '';
+  } catch { /* body was not JSON */ }
+
+  if (res.status === 401) return new DriveError('Your Google session expired — please reconnect.', { kind: 'auth', status: 401, reason });
+  if (res.status === 429 || (res.status === 403 && RATE_REASONS.has(reason))) {
+    return new DriveError('Google is rate-limiting requests — Finora will retry shortly.', { kind: 'rate', status: res.status, reason });
+  }
+  if (res.status === 403) {
+    return new DriveError(`Google refused access (403). Reconnect and make sure the Drive permission is ticked.${detail ? ` (${detail})` : ''}`, { kind: 'scope', status: 403, reason });
+  }
+  if (res.status === 404) return new DriveError('The backup file was not found in Google Drive.', { kind: 'notfound', status: 404, reason });
+  if (res.status >= 500) return new DriveError('Google Drive is having trouble right now — Finora will retry shortly.', { kind: 'server', status: res.status, reason });
+  return new DriveError(`Google Drive request failed (${res.status}).${detail ? ` ${detail}` : ''}`, { kind: 'other', status: res.status, reason });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Small helpers                                                          */
+/* ---------------------------------------------------------------------- */
+
+/** Cuts `str` so its UTF-8 encoding is at most `maxBytes`, never splitting a character. */
+export function truncateUtf8(str, maxBytes) {
+  const enc = new TextEncoder();
+  let out = '';
+  let used = 0;
+  for (const ch of String(str ?? '')) {                 // iterates by code point
+    const n = enc.encode(ch).length;
+    if (used + n > maxBytes) break;
+    out += ch; used += n;
+  }
+  return out;
+}
+
+/** appProperties that respect Drive's 124-byte (key + value) limit per property. */
+export function buildAppProperties({ datasetId, profileName }) {
+  const props = { app: 'finora' };
+  props.datasetId = truncateUtf8(datasetId, APP_PROPERTY_MAX_BYTES - 'datasetId'.length);
+  const name = truncateUtf8(profileName || '', APP_PROPERTY_MAX_BYTES - 'profileName'.length);
+  if (name) props.profileName = name;
+  return props;
+}
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Bookkeeping that changes on its own (every backup, every daily notification) must not count as
+// "your data changed", or the hash would never be stable and "unchanged" could never be detected.
+const HASH_IGNORED_SETTINGS = new Set(['lastBackupAt', 'notifiedLog']);
+
+/** Hash of the data that would be backed up (stable: stores are read in key order). */
+export async function hashStores(stores) {
+  const stable = { ...stores, settings: (stores.settings || []).filter((r) => !HASH_IGNORED_SETTINGS.has(r.key)) };
+  return sha256Hex(JSON.stringify(stable));
+}
+
+/* ---------------------------------------------------------------------- */
+/* Drive HTTP helper                                                      */
+/* ---------------------------------------------------------------------- */
+
+async function driveFetch(url, options = {}, { retried = false, interactive = true } = {}) {
+  const token = await ensureAccessToken({ interactive });
+  if (!token) throw new DriveError('Not connected to Google — please reconnect.', { kind: 'auth', status: 401 });
+
+  let res;
+  try {
+    res = await fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${token}` } });
+  } catch {
+    throw new DriveError('Could not reach Google Drive — check your internet connection.', { kind: 'network' });
   }
 
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...(options.headers || {}),
-      Authorization: `Bearer ${token}`,
-    },
-  });
-
-  if (res.status === 401) {
-    throw new Error(
-      'Your Google session expired — please reconnect.'
-    );
+  if (res.status === 401 && !retried) {          // token died mid-session: refresh once and retry
+    invalidateAccessToken();
+    return driveFetch(url, options, { retried: true, interactive });
   }
-
-  if (!res.ok) {
-    throw new Error(
-      `Google Drive request failed (${res.status}).`
-    );
-  }
-
+  if (!res.ok) throw await toDriveError(res);
   return res;
 }
 
-// --------------------------------------------------------------------------
-// Find backup by filename
-// --------------------------------------------------------------------------
+/* ---------------------------------------------------------------------- */
+/* Listing / classifying cloud files                                      */
+/* ---------------------------------------------------------------------- */
 
-async function findFileByName(name) {
-  if (!name) {
-    return null;
+function classify(file) {
+  const props = file.appProperties || {};
+  if (file.name.startsWith(DATASET_PREFIX)) {
+    return { type: 'dataset', datasetId: props.datasetId || file.name.slice(DATASET_PREFIX.length).replace(/\.json$/, ''), profileName: props.profileName || '' };
   }
-
-  // Escape single quotes for Google Drive's query syntax.
-  const escapedName = name.replace(/'/g, "\\'");
-
-  const url =
-    `https://www.googleapis.com/drive/v3/files` +
-    `?spaces=appDataFolder` +
-    `&q=name%3D%27${encodeURIComponent(escapedName)}%27` +
-    `&fields=files(id,name,modifiedTime)` +
-    `&pageSize=10`;
-
-  const res = await driveFetch(url);
-  const data = await res.json();
-
-  if (!data.files || data.files.length === 0) {
-    return null;
-  }
-
-  return data.files[0];
+  if (file.name === V2_FILE_NAME) return { type: 'legacy', datasetId: null, profileName: '' };
+  if (/^finora-backup-.+\.json$/.test(file.name)) return { type: 'legacy', datasetId: null, profileName: '' };
+  return null; // not ours
 }
-
-// --------------------------------------------------------------------------
-// Find the current Google-account backup
-// --------------------------------------------------------------------------
 
 /**
- * Finds the new account-based backup first.
- *
- * If it doesn't exist, falls back to the old local-profile-based backup.
- *
- * Returns:
- *   {
- *     file,
- *     type: 'cloud' | 'legacy'
- *   }
- *
- * or null.
+ * All Finora backups in this Google account, newest first.
+ * `interactive:false` is used by automatic sync: never open a sign-in popup in the background.
  */
-async function findExistingFile() {
-  // ------------------------------------------------------------
-  // 1. New multi-device backup
-  // ------------------------------------------------------------
-
-  const cloudFile = await findFileByName(
-    CLOUD_BACKUP_FILE_NAME
-  );
-
-  if (cloudFile) {
-    return {
-      file: cloudFile,
-      type: 'cloud',
-    };
-  }
-
-  // ------------------------------------------------------------
-  // 2. Legacy backup
-  // ------------------------------------------------------------
-
-  const legacyName = legacyBackupFileName();
-
-  if (legacyName) {
-    const legacyFile = await findFileByName(legacyName);
-
-    if (legacyFile) {
-      return {
-        file: legacyFile,
-        type: 'legacy',
-      };
-    }
-  }
-
-  return null;
+export async function listCloudBackups({ interactive = true } = {}) {
+  const url = `${DRIVE}?spaces=appDataFolder&pageSize=100&orderBy=${encodeURIComponent('modifiedTime desc')}` +
+    `&fields=${encodeURIComponent('files(id,name,modifiedTime,version,size,appProperties)')}`;
+  const data = await (await driveFetch(url, {}, { interactive })).json();
+  return (data.files || []).map((f) => {
+    const c = classify(f);
+    return c ? { id: f.id, name: f.name, modifiedTime: f.modifiedTime, version: f.version != null ? String(f.version) : '', size: Number(f.size) || 0, ...c } : null;
+  }).filter(Boolean);
 }
 
-// --------------------------------------------------------------------------
-// Create encrypted backup container
-// --------------------------------------------------------------------------
+/** Summary for the Settings card: this dataset's backup (if any) and how many others exist. */
+export async function getGoogleDriveBackupInfo() {
+  const [all, datasetId] = await Promise.all([listCloudBackups(), getDatasetId()]);
+  const mine = all.find((b) => b.type === 'dataset' && b.datasetId === datasetId) || null;
+  return { mine, others: all.filter((b) => b !== mine), total: all.length };
+}
 
-async function createBackupContainer(stableId) {
-  const stores = await exportAllStores();
+/** True when the cloud file differs from what this device last synced (version, else modifiedTime). */
+export function cloudMovedOn(remote, sync, datasetId) {
+  if (!remote) return false;
+  if (!sync || sync.datasetId !== datasetId || sync.fileId !== remote.id) return true;
+  if (remote.version && sync.version) return remote.version !== sync.version;
+  return remote.modifiedTime !== sync.modifiedTime;
+}
 
-  const plaintext = new TextEncoder().encode(
-    JSON.stringify({
-      stores,
-      exportedAt: new Date().toISOString(),
-    })
-  );
+/* ---------------------------------------------------------------------- */
+/* Container (encrypt / decrypt)                                          */
+/* ---------------------------------------------------------------------- */
 
-  // Every backup gets a fresh salt and IV.
-  const salt = crypto.getRandomValues(
-    new Uint8Array(16)
-  );
-
-  const iv = crypto.getRandomValues(
-    new Uint8Array(12)
-  );
-
-  // IMPORTANT:
-  // Same Google account -> same stable ID -> same derived key.
-  //
-  // The salt is stored inside the backup and therefore doesn't need to be
-  // the same between backups.
-  const key = await deriveKey(
-    stableId + APP_PEPPER,
-    salt,
-    'encrypt'
-  );
-
-  const ciphertext = await crypto.subtle.encrypt(
-    {
-      name: 'AES-GCM',
-      iv,
-    },
-    key,
-    plaintext
-  );
-
+async function createBackupContainer(stableId, datasetId, stores) {
+  const plaintext = new TextEncoder().encode(JSON.stringify({ stores, exportedAt: new Date().toISOString() }));
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(stableId + APP_PEPPER, salt, 'encrypt');
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
   return {
     version: BACKUP_VERSION,
     dbAppVersion: DB_VERSION,
@@ -255,334 +239,178 @@ async function createBackupContainer(stableId) {
     iv: bufToBase64(iv),
     ciphertext: bufToBase64(ciphertext),
     timestamp: new Date().toISOString(),
-
-    // Helpful metadata for debugging / future migrations.
     keySource: 'google-account',
-    storageIdentity: 'google-account',
+    datasetId,
   };
 }
 
-// --------------------------------------------------------------------------
-// Create a new Drive file
-// --------------------------------------------------------------------------
-
-async function createDriveFile(fileName, fileContent) {
-  const metadata = {
-    name: fileName,
-    parents: ['appDataFolder'],
-  };
-
-  const boundary =
-    'finora-boundary-' + Date.now();
-
-  const multipartBody =
-    `--${boundary}\r\n` +
-    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-    `${JSON.stringify(metadata)}\r\n` +
-    `--${boundary}\r\n` +
-    `Content-Type: application/json\r\n\r\n` +
-    `${fileContent}\r\n` +
-    `--${boundary}--`;
-
-  return driveFetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type':
-          `multipart/related; boundary=${boundary}`,
-      },
-      body: multipartBody,
-    }
-  );
-}
-
-// --------------------------------------------------------------------------
-// Update an existing Drive file
-// --------------------------------------------------------------------------
-
-async function updateDriveFile(fileId, fileContent) {
-  return driveFetch(
-    `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media`,
-    {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: fileContent,
-    }
-  );
-}
-
-// --------------------------------------------------------------------------
-// Backup
-// --------------------------------------------------------------------------
-
-/**
- * Backs up the active Finora data to the connected Google account.
- *
- * NEW behavior:
- *   Always writes to:
- *
- *   finora-google-backup.json
- *
- * This filename is independent of the local Finora profile ID, so the same
- * Google account can find the same backup from another device.
- */
-export async function backupToGoogleDrive() {
-  const stableId = getStableAccountId();
-
-  if (!stableId) {
-    throw new Error(
-      'Not connected to Google — please reconnect.'
-    );
-  }
-
-  // Create encrypted backup.
-  const container =
-    await createBackupContainer(stableId);
-
-  const fileContent =
-    JSON.stringify(container);
-
-  // ------------------------------------------------------------
-  // Look for the new account-based backup.
-  // ------------------------------------------------------------
-
-  const cloudFile =
-    await findFileByName(CLOUD_BACKUP_FILE_NAME);
-
-  if (cloudFile) {
-    // Update the existing account-based backup.
-    await updateDriveFile(
-      cloudFile.id,
-      fileContent
-    );
-  } else {
-    // ----------------------------------------------------------
-    // No new backup exists.
-    //
-    // IMPORTANT:
-    // We deliberately create the new account-based backup instead
-    // of overwriting the old legacy file.
-    //
-    // This preserves the old backup until the new backup is known
-    // to be working correctly.
-    // ----------------------------------------------------------
-
-    await createDriveFile(
-      CLOUD_BACKUP_FILE_NAME,
-      fileContent
-    );
-  }
-
-  await recordBackupCompleted();
-
-  return {
-    timestamp: container.timestamp,
-  };
-}
-
-// --------------------------------------------------------------------------
-// Backup information
-// --------------------------------------------------------------------------
-
-/**
- * Returns information about the available Google Drive backup.
- *
- * New account-based backup is preferred.
- * Legacy backup is returned only if the new one doesn't exist.
- */
-export async function getGoogleDriveBackupInfo() {
-  const existing =
-    await findExistingFile();
-
-  if (!existing) {
-    return null;
-  }
-
-  return {
-    modifiedTime:
-      existing.file.modifiedTime,
-
-    fileId:
-      existing.file.id,
-
-    storageType:
-      existing.type,
-  };
-}
-
-// --------------------------------------------------------------------------
-// Download backup
-// --------------------------------------------------------------------------
-
-async function downloadBackupFile(fileId) {
-  const res = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`
-  );
-
-  return res.text();
-}
-
-// --------------------------------------------------------------------------
-// Parse + decrypt backup
-// --------------------------------------------------------------------------
-
-async function decryptBackup(
-  fileContent,
-  stableId
-) {
+async function decryptContainer(fileContent, stableId) {
   let container;
-
-  // ------------------------------------------------------------
-  // Parse JSON
-  // ------------------------------------------------------------
-
-  try {
-    container = JSON.parse(fileContent);
-  } catch {
-    throw new ValidationError(
-      'The Google Drive backup is corrupted or unreadable.'
-    );
+  try { container = JSON.parse(fileContent); } catch { throw new ValidationError('The Google Drive backup is corrupted or unreadable.'); }
+  if (!container?.ciphertext || !container.salt || !container.iv) {
+    throw new ValidationError('The Google Drive backup is corrupted or in an unrecognized format.');
   }
-
-  // ------------------------------------------------------------
-  // Validate encrypted container
-  // ------------------------------------------------------------
-
-  if (
-    !container ||
-    !container.ciphertext ||
-    !container.salt ||
-    !container.iv
-  ) {
-    throw new ValidationError(
-      'The Google Drive backup is corrupted or in an unrecognized format.'
-    );
-  }
-
-  // ------------------------------------------------------------
-  // Decrypt
-  // ------------------------------------------------------------
-
   try {
-    const salt =
-      base64ToBuf(container.salt);
-
-    const iv =
-      base64ToBuf(container.iv);
-
-    // Same Google account -> same stableId -> same key.
-    const key = await deriveKey(
-      stableId + APP_PEPPER,
-      salt,
-      'decrypt'
-    );
-
-    const plaintextBuf =
-      await crypto.subtle.decrypt(
-        {
-          name: 'AES-GCM',
-          iv,
-        },
-        key,
-        base64ToBuf(container.ciphertext)
-      );
-
-    return JSON.parse(
-      new TextDecoder().decode(
-        plaintextBuf
-      )
-    );
+    const key = await deriveKey(stableId + APP_PEPPER, base64ToBuf(container.salt), 'decrypt',
+      Number(container.iterations) || LEGACY_PBKDF2_ITERATIONS);
+    const buf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBuf(container.iv) }, key, base64ToBuf(container.ciphertext));
+    return { payload: JSON.parse(new TextDecoder().decode(buf)), container };
   } catch {
-    throw new ValidationError(
-      'Could not decrypt this backup — it may belong to a different Google account.'
-    );
+    throw new ValidationError('Could not decrypt this backup — it may belong to a different Google account.');
   }
 }
 
-// --------------------------------------------------------------------------
-// Restore
-// --------------------------------------------------------------------------
+/* ---------------------------------------------------------------------- */
+/* Upload (multipart <= 4 MB, resumable above)                            */
+/* ---------------------------------------------------------------------- */
+
+async function uploadFile({ fileId, name, appProperties, content, interactive }) {
+  const bytes = new TextEncoder().encode(content);
+  const metadata = fileId ? { appProperties } : { name, parents: ['appDataFolder'], appProperties };
+  const fields = 'id,modifiedTime,version';
+  const target = fileId ? `${UPLOAD}/${encodeURIComponent(fileId)}` : UPLOAD;
+  const method = fileId ? 'PATCH' : 'POST';            // PATCH, not PUT: PUT gives no resumable session Location
+  let result;
+
+  if (bytes.length <= MULTIPART_LIMIT_BYTES) {
+    const boundary = `finora-${Date.now().toString(36)}`;
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+    const res = await driveFetch(`${target}?uploadType=multipart&fields=${fields}`, {
+      method, headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
+    }, { interactive });
+    result = await res.json();
+  } else {
+    // Resumable: 1) open a session with the metadata, 2) send the bytes to the session URL.
+    const init = await driveFetch(`${target}?uploadType=resumable&fields=${fields}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': 'application/json',
+        'X-Upload-Content-Length': String(bytes.length),
+      },
+      body: JSON.stringify(metadata),
+    }, { interactive });
+    const session = init.headers.get('Location');
+    if (!session) throw new DriveError('Google did not open an upload session — please try again.', { kind: 'other' });
+    let put;
+    try { put = await fetch(session, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: bytes }); }
+    catch { throw new DriveError('Upload was interrupted — check your connection.', { kind: 'network' }); }
+    if (!put.ok) throw await toDriveError(put);
+    result = await put.json();
+  }
+
+  // Be defensive: if the final response did not echo the requested fields, ask for them.
+  if (!result.version || !result.modifiedTime) {
+    const meta = await (await driveFetch(`${DRIVE}/${encodeURIComponent(result.id)}?fields=${fields}`, {}, { interactive })).json();
+    result = { ...result, ...meta };
+  }
+  return result;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Backup                                                                 */
+/* ---------------------------------------------------------------------- */
 
 /**
- * Downloads and restores the backup belonging to the connected Google
- * account.
- *
- * IMPORTANT:
- * The active local profile ID is NOT used to find the new cloud backup.
- *
- * This is what enables:
- *
- *   PC profile ID A
- *          ↓
- *     Google account
- *          ↓
- *   Mobile profile ID B
- *
- * to restore the same backup.
+ * Backs this profile's data up to Google Drive.
+ *   force            overwrite even if the cloud copy changed since our last sync
+ *   skipIfUnchanged  automatic sync: do nothing when the data is identical to what is already in the cloud
+ *   interactive      false for background sync (never opens a popup)
+ * Throws CloudConflictError if the cloud copy changed since this device last synced.
+ * Returns { timestamp, skipped? }.
  */
-export async function restoreFromGoogleDrive(
-  mode = 'merge'
-) {
+export async function backupToGoogleDrive({ force = false, skipIfUnchanged = false, interactive = true } = {}) {
   const stableId = getStableAccountId();
+  if (!stableId) throw new DriveError('Not connected to Google — please reconnect.', { kind: 'auth', status: 401 });
 
-  if (!stableId) {
-    throw new Error(
-      'Not connected to Google — please reconnect.'
-    );
+  const datasetId = await getDatasetId();
+  const name = `${DATASET_PREFIX}${datasetId}.json`;
+  const all = await listCloudBackups({ interactive });
+  const remote = all.find((b) => b.name === name) || null;
+  const sync = await getCloudSync();
+
+  if (remote && !force && cloudMovedOn(remote, sync, datasetId)) {
+    throw new CloudConflictError({ remoteModifiedTime: remote.modifiedTime, reason: sync ? 'remote-changed' : 'unknown-state' });
   }
 
-  // Find account-based backup first, then legacy backup.
-  const existing =
-    await findExistingFile();
-
-  if (!existing) {
-    throw new ValidationError(
-      'No Google Drive backup found for this Google account.'
-    );
+  const stores = await exportAllStores();
+  const contentHash = await hashStores(stores);
+  if (skipIfUnchanged && remote && sync?.contentHash === contentHash && !cloudMovedOn(remote, sync, datasetId)) {
+    return { timestamp: sync.at, skipped: true };
   }
 
-  // Download.
-  const fileContent =
-    await downloadBackupFile(
-      existing.file.id
-    );
+  const container = await createBackupContainer(stableId, datasetId, stores);
+  const result = await uploadFile({
+    fileId: remote?.id, name,
+    appProperties: buildAppProperties({ datasetId, profileName: getActiveProfile()?.name }),
+    content: JSON.stringify(container),
+    interactive,
+  });
 
-  // Decrypt.
-  const payload =
-    await decryptBackup(
-      fileContent,
-      stableId
-    );
+  await setCloudSync({
+    datasetId, fileId: result.id, version: result.version != null ? String(result.version) : '',
+    modifiedTime: result.modifiedTime, contentHash, at: new Date().toISOString(),
+  });
+  await recordBackupCompleted();
+  return { timestamp: container.timestamp };
+}
 
-  // Validate decrypted payload.
-  if (
-    !payload ||
-    typeof payload !== 'object' ||
-    !payload.stores
-  ) {
-    throw new ValidationError(
-      'This backup is invalid or incompatible with this version of Finora.'
-    );
+/* ---------------------------------------------------------------------- */
+/* Restore                                                                */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * Downloads a cloud backup and applies it (mode 'merge' | 'replace').
+ * With several backups present you must pass {fileId}; otherwise CloudChoiceRequired
+ * carries the list so the UI can ask. Restoring a dataset file adopts its datasetId, so
+ * this device keeps syncing to that same file afterwards.
+ */
+export async function restoreFromGoogleDrive(mode = 'merge', { fileId, interactive = true, beforeApply } = {}) {
+  const stableId = getStableAccountId();
+  if (!stableId) throw new DriveError('Not connected to Google — please reconnect.', { kind: 'auth', status: 401 });
+
+  const all = await listCloudBackups({ interactive });
+  if (all.length === 0) throw new ValidationError('No Google Drive backup found for this Google account.');
+
+  let chosen;
+  if (fileId) {
+    chosen = all.find((b) => b.id === fileId);
+  } else if (all.length === 1) {
+    chosen = all[0];
+  } else {
+    // Several backups and no explicit choice: use this profile's own file if it has one,
+    // otherwise make the caller ask the user.
+    const myId = await getDatasetId();
+    chosen = all.find((b) => b.type === 'dataset' && b.datasetId === myId);
+    if (!chosen) throw new CloudChoiceRequired(all);
+  }
+  if (!chosen) throw new ValidationError('That backup is no longer in Google Drive.');
+
+  const text = await (await driveFetch(`${DRIVE}/${encodeURIComponent(chosen.id)}?alt=media`, {}, { interactive })).text();
+  const { payload, container } = await decryptContainer(text, stableId);
+  if (!payload || typeof payload !== 'object' || !payload.stores) {
+    throw new ValidationError('This backup is invalid or incompatible with this version of Finora.');
   }
 
-  // Apply through the existing tested restore system.
-  await restoreBackup(
-    payload,
-    mode
-  );
+  // Automatic sync passes beforeApply to re-check for edits made while we were downloading;
+  // it throws to abort so a replace can never erase something typed a moment ago.
+  if (beforeApply) await beforeApply(chosen);
+  // A cloud-driven REPLACE gives this device an exact copy of data already in the cloud, so it is not a
+  // "change" to upload again. A MERGE does change local data, so it stays visible as a change.
+  await restoreBackup(payload, mode, { quiet: mode === 'replace' });
 
-  return {
-    timestamp:
-      existing.file.modifiedTime,
-
-    dbAppVersion:
-      payload.dbAppVersion ??
-      null,
-
-    storageType:
-      existing.type,
-  };
+  if (chosen.type === 'dataset') {
+    const id = chosen.datasetId || container.datasetId;
+    if (id) {
+      await setDatasetId(id);
+      // Remember what we are now in sync with, including a hash of OUR data, so the next
+      // automatic backup is skipped when nothing has changed since this restore.
+      await setCloudSync({
+        datasetId: id, fileId: chosen.id, version: chosen.version, modifiedTime: chosen.modifiedTime,
+        contentHash: await hashStores(await exportAllStores()), at: new Date().toISOString(),
+      });
+    }
+  }
+  return { timestamp: chosen.modifiedTime, dbAppVersion: payload.dbAppVersion ?? null, storageType: chosen.type, profileName: chosen.profileName };
 }

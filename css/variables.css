@@ -11,6 +11,9 @@
    ========================================================================== */
 
 :root {
+  /* Colour-blind-safe chart colours (Okabe-Ito family), each >= 3:1 on both light and dark surfaces */
+  --chart-income: #0072B2;
+  --chart-expense: #D55E00;
   /* --- Fallback palette (used only before JS sets data-theme) — same as 'light' --- */
   --color-bg: #F5F5FC;
   --color-surface: #FFFFFF;
@@ -20,17 +23,17 @@
 
   --color-text: #16151F;
   --color-text-muted: #6B6B80;
-  --color-text-faint: #9C9CAE;
+  --color-text-faint: #706F7F;
 
   --color-primary: #4A47E0;
   --color-primary-hover: #3D3ACC;
-  --color-primary-soft: #EEEDFC;
+  --color-primary-soft: #EEEDFC; --color-on-primary: #FFFFFF;
 
-  --color-success: #12805C;
+  --color-success: #127D5A;
   --color-success-soft: #E3F5EE;
   --color-danger: #C4342B;
   --color-danger-soft: #FBEAE9;
-  --color-warning: #A6650F;
+  --color-warning: #9D6010;
   --color-warning-soft: #FBF0DF;
 
   --color-in: var(--color-success);
@@ -42,7 +45,7 @@
   --sidebar-border: #2A2B35;
   --sidebar-text: #F0F0F5;
   --sidebar-text-muted: #9A9AAA;
-  --sidebar-text-faint: #6E6E7E;
+  --sidebar-text-faint: #858593;
 
   /* --- Typography --- */
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -88,17 +91,17 @@
 [data-theme='light'] {
   --color-bg: #F5F5FC; --color-surface: #FFFFFF; --color-surface-raised: #FFFFFF;
   --color-border: #E3E3F5; --color-border-strong: #CFCFEA;
-  --color-text: #16151F; --color-text-muted: #6B6B80; --color-text-faint: #9C9CAE;
-  --color-primary: #4A47E0; --color-primary-hover: #3D3ACC; --color-primary-soft: #EEEDFC;
-  --color-success: #12805C; --color-success-soft: #E3F5EE;
+  --color-text: #16151F; --color-text-muted: #6B6B80; --color-text-faint: #706F7F;
+  --color-primary: #4A47E0; --color-primary-hover: #3D3ACC; --color-primary-soft: #EEEDFC; --color-on-primary: #FFFFFF;
+  --color-success: #127D5A; --color-success-soft: #E3F5EE;
   --color-danger: #C4342B; --color-danger-soft: #FBEAE9;
-  --color-warning: #A6650F; --color-warning-soft: #FBF0DF;
+  --color-warning: #9D6010; --color-warning-soft: #FBF0DF;
   --color-transfer: #4A5A78;
   --shadow-sm: 0 1px 2px rgba(20, 22, 27, 0.04);
   --shadow-md: 0 4px 16px rgba(20, 22, 27, 0.08);
   --shadow-modal: 0 12px 40px rgba(20, 22, 27, 0.18);
   --sidebar-bg: #15161C; --sidebar-surface: #1D1E26; --sidebar-border: #2A2B35;
-  --sidebar-text: #F0F0F5; --sidebar-text-muted: #9A9AAA; --sidebar-text-faint: #6E6E7E;
+  --sidebar-text: #F0F0F5; --sidebar-text-muted: #9A9AAA; --sidebar-text-faint: #858593;
   --page-bg-image: none;
 }
 
@@ -106,8 +109,8 @@
 [data-theme='dark'] {
   --color-bg: #000000; --color-surface: #121018; --color-surface-raised: #17141F;
   --color-border: #262436; --color-border-strong: #34324A;
-  --color-text: #F1F0F8; --color-text-muted: #A29FBD; --color-text-faint: #726F8C;
-  --color-primary: #7C79F0; --color-primary-hover: #918EF5; --color-primary-soft: #201E3F;
+  --color-text: #F1F0F8; --color-text-muted: #A29FBD; --color-text-faint: #7F7C97;
+  --color-primary: #7C79F0; --color-primary-hover: #918EF5; --color-primary-soft: #201E3F; --color-on-primary: #0B0A14;
   --color-transfer: #9AA8C2;
   --color-success: #35C08D; --color-success-soft: #123227;
   --color-danger: #E8615A; --color-danger-soft: #3A1D1C;
@@ -116,7 +119,7 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
   --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.7);
   --sidebar-bg: #F2F2F7; --sidebar-surface: #FFFFFF; --sidebar-border: #E1E1EA;
-  --sidebar-text: #17171E; --sidebar-text-muted: #6B6B7A; --sidebar-text-faint: #9B9BAA;
+  --sidebar-text: #17171E; --sidebar-text-muted: #6B6B7A; --sidebar-text-faint: #6E6E7A;
   --page-bg-image: none;
 }
 
@@ -125,8 +128,8 @@
   [data-theme='system'] {
     --color-bg: #000000; --color-surface: #121018; --color-surface-raised: #17141F;
     --color-border: #262436; --color-border-strong: #34324A;
-    --color-text: #F1F0F8; --color-text-muted: #A29FBD; --color-text-faint: #726F8C;
-    --color-primary: #7C79F0; --color-primary-hover: #918EF5; --color-primary-soft: #201E3F;
+    --color-text: #F1F0F8; --color-text-muted: #A29FBD; --color-text-faint: #7F7C97;
+    --color-primary: #7C79F0; --color-primary-hover: #918EF5; --color-primary-soft: #201E3F; --color-on-primary: #0B0A14;
     --color-transfer: #9AA8C2;
     --color-success: #35C08D; --color-success-soft: #123227;
     --color-danger: #E8615A; --color-danger-soft: #3A1D1C;
@@ -135,7 +138,7 @@
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
     --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.7);
     --sidebar-bg: #F2F2F7; --sidebar-surface: #FFFFFF; --sidebar-border: #E1E1EA;
-    --sidebar-text: #17171E; --sidebar-text-muted: #6B6B7A; --sidebar-text-faint: #9B9BAA;
+    --sidebar-text: #17171E; --sidebar-text-muted: #6B6B7A; --sidebar-text-faint: #6E6E7A;
   }
 }
 
@@ -150,8 +153,8 @@
 [data-theme='cyber-teal'] {
   --color-bg: #0B131F; --color-surface: #142338; --color-surface-raised: #1A2C45;
   --color-border: #223350; --color-border-strong: #2E4468;
-  --color-text: #FFFFFF; --color-text-muted: #7D8B9B; --color-text-faint: #5A6779;
-  --color-primary: #00E599; --color-primary-hover: #00C985; --color-primary-soft: #0F3B31;
+  --color-text: #FFFFFF; --color-text-muted: #8693A2; --color-text-faint: #8A93A0;
+  --color-primary: #00E599; --color-primary-hover: #00C985; --color-primary-soft: #0F3B31; --color-on-primary: #0B0A14;
   --color-transfer: #008B74;
   --color-success: #00E599; --color-success-soft: #0F3B31;
   --color-danger: #FF5C5C; --color-danger-soft: #3A1717;
@@ -160,7 +163,7 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
   --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.7);
   --sidebar-bg: #F2F2F7; --sidebar-surface: #FFFFFF; --sidebar-border: #E1E1EA;
-  --sidebar-text: #17171E; --sidebar-text-muted: #6B6B7A; --sidebar-text-faint: #9B9BAA;
+  --sidebar-text: #17171E; --sidebar-text-muted: #6B6B7A; --sidebar-text-faint: #6E6E7A;
   --page-bg-image: none;
 }
 
@@ -168,8 +171,8 @@
 [data-theme='neon-amber'] {
   --color-bg: #120E0D; --color-surface: #1E1815; --color-surface-raised: #271F1A;
   --color-border: #342823; --color-border-strong: #4A382F;
-  --color-text: #FFFFFF; --color-text-muted: #A89F9A; --color-text-faint: #7A716C;
-  --color-primary: #FF661A; --color-primary-hover: #FFA347; --color-primary-soft: #3A2213;
+  --color-text: #FFFFFF; --color-text-muted: #A89F9A; --color-text-faint: #8E8682;
+  --color-primary: #FF661A; --color-primary-hover: #FFA347; --color-primary-soft: #3A2213; --color-on-primary: #0B0A14;
   --color-transfer: #FFA347;
   --color-success: #4ADE80; --color-success-soft: #163020;
   --color-danger: #FF5C5C; --color-danger-soft: #3A1717;
@@ -178,7 +181,7 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
   --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.7);
   --sidebar-bg: #F7F2EF; --sidebar-surface: #FFFFFF; --sidebar-border: #EAE0DA;
-  --sidebar-text: #1A140F; --sidebar-text-muted: #7A6D64; --sidebar-text-faint: #A89F9A;
+  --sidebar-text: #1A140F; --sidebar-text-muted: #7A6D64; --sidebar-text-faint: #756D68;
   --page-bg-image: none;
 }
 
@@ -186,8 +189,8 @@
 [data-theme='midnight-gold'] {
   --color-bg: #070C16; --color-surface: #111A2E; --color-surface-raised: #16223A;
   --color-border: #1F2E4D; --color-border-strong: #2B3F66;
-  --color-text: #F8FAFC; --color-text-muted: #94A3B8; --color-text-faint: #64748B;
-  --color-primary: #FCA311; --color-primary-hover: #FFB733; --color-primary-soft: #3A2B0F;
+  --color-text: #F8FAFC; --color-text-muted: #94A3B8; --color-text-faint: #7D8B9E;
+  --color-primary: #FCA311; --color-primary-hover: #FFB733; --color-primary-soft: #3A2B0F; --color-on-primary: #0B0A14;
   --color-transfer: #94A3B8;
   --color-success: #4ADE80; --color-success-soft: #163020;
   --color-danger: #FF5C5C; --color-danger-soft: #3A1717;
@@ -196,7 +199,7 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
   --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.7);
   --sidebar-bg: #F1F3F9; --sidebar-surface: #FFFFFF; --sidebar-border: #E2E6F0;
-  --sidebar-text: #0F172A; --sidebar-text-muted: #64748B; --sidebar-text-faint: #94A3B8;
+  --sidebar-text: #0F172A; --sidebar-text-muted: #617087; --sidebar-text-faint: #636F83;
   --page-bg-image: none;
 }
 
@@ -204,8 +207,8 @@
 [data-theme='deep-pine'] {
   --color-bg: #061715; --color-surface: #0E2925; --color-surface-raised: #133430;
   --color-border: #1A403A; --color-border-strong: #245349;
-  --color-text: #EAF6F3; --color-text-muted: #72968E; --color-text-faint: #4F6E67;
-  --color-primary: #45D49E; --color-primary-hover: #63E0B2; --color-primary-soft: #0F332A;
+  --color-text: #EAF6F3; --color-text-muted: #7A9D95; --color-text-faint: #829B95;
+  --color-primary: #45D49E; --color-primary-hover: #63E0B2; --color-primary-soft: #0F332A; --color-on-primary: #0B0A14;
   --color-transfer: #94C7B6;
   --color-success: #45D49E; --color-success-soft: #0F332A;
   --color-danger: #FF6B5C; --color-danger-soft: #3A1917;
@@ -214,7 +217,7 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
   --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.7);
   --sidebar-bg: #F0F7F5; --sidebar-surface: #FFFFFF; --sidebar-border: #DEEAE6;
-  --sidebar-text: #0B211D; --sidebar-text-muted: #5E7D75; --sidebar-text-faint: #8FA9A2;
+  --sidebar-text: #0B211D; --sidebar-text-muted: #58776F; --sidebar-text-faint: #5D756F;
   --page-bg-image: none;
 }
 
@@ -222,17 +225,17 @@
 [data-theme='ocean-twilight'] {
   --color-bg: #0F2027; --color-surface: #1B323D; --color-surface-raised: #223D49;
   --color-border: #2A4956; --color-border-strong: #385F6E;
-  --color-text: #FFFFFF; --color-text-muted: #8CA4AF; --color-text-faint: #64818D;
-  --color-primary: #00D2FF; --color-primary-hover: #47DEFF; --color-primary-soft: #0F3540;
+  --color-text: #FFFFFF; --color-text-muted: #8FA7B1; --color-text-faint: #91A6AE;
+  --color-primary: #00D2FF; --color-primary-hover: #47DEFF; --color-primary-soft: #0F3540; --color-on-primary: #0B0A14;
   --color-transfer: #8CA4AF;
   --color-success: #4ADE80; --color-success-soft: #163020;
-  --color-danger: #FF6B5C; --color-danger-soft: #3A1917;
+  --color-danger: #FF7A6C; --color-danger-soft: #3A1917;
   --color-warning: #FFC24B; --color-warning-soft: #3A2C0F;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
   --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.7);
   --sidebar-bg: #EFF6F8; --sidebar-surface: #FFFFFF; --sidebar-border: #DCE8EC;
-  --sidebar-text: #0F2027; --sidebar-text-muted: #5E7680; --sidebar-text-faint: #8CA4AF;
+  --sidebar-text: #0F2027; --sidebar-text-muted: #5C747E; --sidebar-text-faint: #5E737D;
   /* Ocean Twilight is the one theme with a gradient page background instead of flat color */
   --page-bg-image: linear-gradient(180deg, #0F2027 0%, #203A43 100%);
 }

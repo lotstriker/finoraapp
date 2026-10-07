@@ -10,9 +10,8 @@
 // ==========================================================================
 
 import { getAll, getById, withTransaction, reqToPromise } from '../core/db.js';
-import { createExpense } from './expenses.js';
-import { lendToPerson, recordRepaymentReceived } from './people.js';
-import { ValidationError, postLinkedReversal, getLedgerForPerson } from '../core/ledger.js';
+import { getCategories } from './categories.js';
+import { ValidationError, postLinkedTransaction, postLinkedReversal, getLedgerForPerson } from '../core/ledger.js';
 import { roundMoney } from '../utils/currency.js';
 
 function newId() {
@@ -48,35 +47,12 @@ export async function createBillSplit(input) {
   const yourShare = roundMoney(input.totalAmount - participantsTotal);
   if (yourShare < 0) throw new ValidationError('The participant shares add up to more than the total amount.');
 
-  // 1. Your own share is the only part that's a real expense for you.
-  //    (Participants' shares are accounted for below via lending, and
-  //    together with your share they correctly total the full bill —
-  //    expensing the FULL amount here as well would double-count the
-  //    money that actually left your account.)
-  const expenseTxn = yourShare > 0
-    ? await createExpense({
-        accountId: input.accountId,
-        amount: yourShare,
-        category: input.category,
-        description: input.description,
-        date: input.date,
-      })
-    : null;
-
-  // 2. Each participant now owes you their share — a normal People lending entry.
-  //    This also correctly reduces your account, since you fronted their portion.
-  const participants = [];
-  for (const p of input.participants) {
-    const lendTxn = await lendToPerson(p.personId, {
-      accountId: input.accountId,
-      amount: p.amount,
-      description: `Share of "${input.description}"`,
-      date: input.date,
-    });
-    participants.push({ personId: p.personId, amount: p.amount, lendingTransactionId: lendTxn.id, settled: false });
+  if (yourShare > 0) {
+    const valid = await getCategories('expense');
+    if (!valid.some((c) => c.name === input.category)) throw new ValidationError('Select a valid expense category.');
   }
 
-  // 3. Group them for display.
+  const date = input.date || new Date().toISOString();
   const record = {
     id: newId(),
     description: input.description,
@@ -84,14 +60,35 @@ export async function createBillSplit(input) {
     totalAmount: input.totalAmount,
     yourShare,
     accountId: input.accountId,
-    date: input.date || new Date().toISOString(),
-    expenseTransactionId: expenseTxn ? expenseTxn.id : null,
-    participants,
+    date,
+    expenseTransactionId: null,
+    participants: [],
     createdAt: new Date().toISOString(),
   };
 
-  await withTransaction(['bill_splits'], 'readwrite', async (tx) => {
-    await reqToPromise(tx.objectStore('bill_splits').put(record));
+  // EVERYTHING (your expense, each person's lending entry, the grouping
+  // record) happens in ONE atomic transaction. Before, these were separate
+  // writes: if participant #2 failed, participant #1's lending and your
+  // expense were already committed and the money stayed stuck in the books.
+  await withTransaction(['ledger', 'accounts', 'settings', 'people', 'bill_splits'], 'readwrite', async (tx) => {
+    // 1. Your own share is the only part that's a real expense for you.
+    if (yourShare > 0) {
+      const exp = await postLinkedTransaction(tx, {
+        type: 'expense', direction: 'out', accountId: input.accountId, amount: yourShare,
+        category: input.category, module: 'expenses', description: input.description, date,
+      });
+      record.expenseTransactionId = exp.id;
+    }
+    // 2. Each participant owes you their share — a normal People lending entry.
+    for (const p of input.participants) {
+      const lend = await postLinkedTransaction(tx, {
+        type: 'person_lending', direction: 'out', accountId: input.accountId, amount: p.amount,
+        personId: p.personId, module: 'people', description: `Share of "${input.description}"`, date,
+      });
+      record.participants.push({ personId: p.personId, amount: p.amount, lendingTransactionId: lend.id, settled: false });
+    }
+    // 3. Group them for display.
+    tx.objectStore('bill_splits').put(record);
   });
   return record;
 }
@@ -124,16 +121,14 @@ export async function reverseBillSplit(id, reason = 'Bill split reversed') {
     }
   }
 
-  await withTransaction(['ledger', 'accounts', 'settings', 'people'], 'readwrite', async (tx) => {
+  // Reversals AND removal of the grouping record: one atomic transaction.
+  await withTransaction(['ledger', 'accounts', 'settings', 'people', 'bill_splits'], 'readwrite', async (tx) => {
     if (split.expenseTransactionId) {
       await postLinkedReversal(tx, split.expenseTransactionId, reason);
     }
     for (const p of split.participants) {
       await postLinkedReversal(tx, p.lendingTransactionId, reason);
     }
-  });
-
-  await withTransaction(['bill_splits'], 'readwrite', async (tx) => {
-    await reqToPromise(tx.objectStore('bill_splits').delete(id));
+    tx.objectStore('bill_splits').delete(id);
   });
 }

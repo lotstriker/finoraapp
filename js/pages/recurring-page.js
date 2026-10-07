@@ -15,6 +15,7 @@ import { icons } from '../utils/icons.js';
 import { openModal, confirmDialog } from '../core/modal.js';
 import { toast } from '../core/toast.js';
 
+import { todayLocal, dateInputToIso } from '../utils/date.js';
 let container = null;
 
 const FREQ_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' };
@@ -139,7 +140,7 @@ function openRecordModal(rule) {
     openModal({
       title: `Record ${rule.name}`,
       bodyHtml: `
-        <p class="text-sm mb-3">${rule.name} expected — record ${formatCurrency(rule.amount)}?</p>
+        <p class="text-sm mb-3">${escapeHtml(rule.name)} expected — record ${formatCurrency(rule.amount)}?</p>
         <div class="field">
           <label for="rp-account">Account</label>
           <select class="select" id="rp-account">${options}</select>
@@ -150,7 +151,7 @@ function openRecordModal(rule) {
         </div>
         <div class="field">
           <label for="rp-date">Payment date</label>
-          <input class="input" id="rp-date" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+          <input class="input" id="rp-date" type="date" value="${todayLocal()}" />
         </div>
       `,
       actions: [
@@ -162,7 +163,7 @@ function openRecordModal(rule) {
             const accountId = qs('#rp-account', root).value;
             const amount = Number(qs('#rp-amount', root).value);
             const dateVal = qs('#rp-date', root).value;
-            const date = dateVal ? new Date(dateVal).toISOString() : undefined;
+            const date = dateInputToIso(dateVal);
             try {
               await recordPayment(rule.id, { accountId, amount, date });
               close();
@@ -235,7 +236,7 @@ async function openCreateModal() {
         </div>
         <div class="field">
           <label for="r-start">First due date</label>
-          <input class="input" id="r-start" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+          <input class="input" id="r-start" type="date" value="${todayLocal()}" />
         </div>
       </form>
     `,
@@ -268,7 +269,7 @@ async function openCreateModal() {
           const frequency = qs('#r-frequency', root).value;
           const intervalDays = qs('#r-interval', root).value;
           const startVal = qs('#r-start', root).value;
-          const startDate = startVal ? new Date(startVal).toISOString() : undefined;
+          const startDate = dateInputToIso(startVal);
 
           try {
             await createRule({

@@ -13,7 +13,7 @@ import { getAll } from '../core/db.js';
  * @param {string} [input.description]
  * @param {string} [input.date]
  */
-export async function createTransfer(input) {
+export async function createTransfer(input, opts = {}) {
   if (input.fromAccountId === input.toAccountId) {
     throw new ValidationError('From and To accounts must be different.');
   }
@@ -26,7 +26,7 @@ export async function createTransfer(input) {
     module: 'transfers',
     description: input.description || 'Transfer',
     date: input.date,
-  });
+  }, opts);
 }
 
 /** All transfer entries, newest first. */
